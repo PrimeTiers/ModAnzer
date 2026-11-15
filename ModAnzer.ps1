@@ -108,7 +108,7 @@ $TrustedListUrl = 'https://raw.githubusercontent.com/napatc1/ModAnzer/main/trust
 # CurseForge lookups go through ModAnzer's small server, which keeps the CurseForge
 # API key private (source: supabase/functions/modanzer-cf in the repo). Only CurseForge
 # file fingerprints (numbers) are sent.
-$CurseForgeProxyUrl = 'https://flifswwrhevzjwwhqitc.supabase.co/functions/v1/modanzer-cf'
+$CurseForgeProxyUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/modanzer-cf'
 
 # Optional: your own CurseForge API key (free at https://console.curseforge.com) to ask
 # CurseForge directly instead. Can also be set with the MODANZER_CF_KEY environment variable.
