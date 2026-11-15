@@ -4,6 +4,16 @@ A Minecraft mod analyzer for Windows. It finds every mods folder on the PC by it
 
 Based on [HabibiModAnalyzer](https://github.com/HadronCollision/PowershellScripts) by HadronCollision.
 
+## Website
+
+**https://modanzer.onrender.com** has the download buttons, the one-liner, and what the tools do and don't do. It's a Render static site built from this repo (`site/index.html`), and it updates on every push to `main`.
+
+Shortest way to run it:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -Command "irm https://modanzer.onrender.com/ModAnzer.txt | iex"
+```
+
 ## Run it
 
 **Easiest way:** download `ModAnzer.ps1`, right-click it and choose **Run with PowerShell**. If Windows asks whether to run a downloaded script, choose **Run once**. The window stays open at the end until you press Enter.
