@@ -1,0 +1,8 @@
+# ModAnzer trusted mods
+# Mods listed here are shown as [OK] even if their code contains cheat-like names.
+# One per line:  <sha1>  <name>
+# The sha1 is printed under every [CHEAT] result. Each version of a mod has its own
+# sha1, so add a new line whenever a trusted mod updates. Lines starting with # are ignored.
+
+1807bd0592525fe40d0d0ee69d30b7486c48fdc7  FastClient HUD 1.21.11
+34911f6d85906b40ca45e7750c65b713955451d2  Dawn Client
