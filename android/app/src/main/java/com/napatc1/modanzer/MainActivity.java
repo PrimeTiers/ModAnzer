@@ -94,6 +94,7 @@ public class MainActivity extends Activity {
         WEAK_NAME_RE = Pattern.compile("(?:^|/)(" + w + ")(?:Module|Hack|Feature|Mod)?(?:\\$[^/]*)?\\.class$");
         WEAK_CONST_RE = Pattern.compile("\u0001\u0000(?:" + wc + ")(?!\\w)");
     }
+    private static final String CF_PROXY_URL = "https://flifswwrhevzjwwhqitc.supabase.co/functions/v1/modanzer-cf";
     private static final String TRUSTED_URL = "https://raw.githubusercontent.com/napatc1/ModAnzer/main/trusted.txt";
 
     // Mods known to be safe even though their code contains a cheat-like name.
@@ -336,7 +337,7 @@ public class MainActivity extends Activity {
         append(sb, "This is NOT a hacking or malware tool. It is read-only and only:\n", C_TEXT, true);
         append(sb, " - Reads the mods folder or .jar files you pick\n"
                 + " - Makes a fingerprint (SHA1 hash) of each mod\n"
-                + " - Looks those fingerprints up on Modrinth and Megabase to name your mods\n"
+                + " - Looks those fingerprints up on Modrinth, Megabase and CurseForge to name your mods\n"
                 + " - Searches mods it doesn't recognise for known cheat names\n"
                 + " - Shows the results on this screen\n\n", C_DIM, false);
         append(sb, "It does NOT:\n", C_TEXT, true);
@@ -460,6 +461,46 @@ public class MainActivity extends Activity {
             if (name != null) known.put(left.get(i), name);
         }
 
+        // CurseForge by fingerprint, through ModAnzer's server (it keeps the API key private)
+        List<String> cfLeft = new ArrayList<>();
+        for (String h : hashes) if (!known.containsKey(h)) cfLeft.add(h);
+        if (!cfLeft.isEmpty()) {
+            Map<Long, String> hashByFp = new HashMap<>();
+            for (int i = 0; i < cfLeft.size(); i++) {
+                setStatus("CurseForge fingerprint " + (i + 1) + " / " + cfLeft.size());
+                String h = cfLeft.get(i);
+                for (Jar j : jars) {
+                    if (h.equals(j.hash)) {
+                        try (InputStream in = getContentResolver().openInputStream(j.uri)) {
+                            if (in != null) hashByFp.put(cfFingerprint(in), h);
+                        } catch (Exception ignored) { }
+                        break;
+                    }
+                }
+            }
+            if (!hashByFp.isEmpty()) {
+                try {
+                    setStatus("Checking " + hashByFp.size() + " mods on CurseForge...");
+                    JSONObject body = new JSONObject();
+                    body.put("fingerprints", new JSONArray(new ArrayList<>(hashByFp.keySet())));
+                    JSONObject m = new JSONObject(http(CF_PROXY_URL, body.toString())).optJSONObject("matches");
+                    JSONArray keys = m == null ? null : m.names();
+                    if (keys != null) {
+                        for (int k = 0; k < keys.length(); k++) {
+                            String fp = keys.getString(k);
+                            String h = hashByFp.get(Long.parseLong(fp));
+                            if (h == null) continue;
+                            String n = m.getJSONObject(fp).optString("name", "");
+                            if (n.isEmpty() || "null".equals(n)) n = "(CurseForge project)";
+                            known.put(h, n + " [CurseForge]");
+                        }
+                    }
+                } catch (Exception e) {
+                    if (netError == null) netError = "CurseForge lookup failed: " + e.getMessage();
+                }
+            }
+        }
+
         // Extra trusted mods from trusted.txt in the GitHub repo
         Map<String, String> trusted = new HashMap<>(TRUSTED);
         try {
@@ -549,7 +590,7 @@ public class MainActivity extends Activity {
             }
             sb.append("\n");
         }
-        append(sb, "?? means it's not on Modrinth/Megabase, not that it's a cheat. "
+        append(sb, "?? means it's not on Modrinth/Megabase/CurseForge, not that it's a cheat. "
                 + "!! is a name match - check it by hand.", C_DIM, false);
         return sb;
     }
@@ -567,6 +608,40 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    // CurseForge fingerprint: MurmurHash2 (seed 1) of the file without tab/LF/CR/space bytes.
+    static long cfFingerprint(InputStream in) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[64 * 1024];
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            for (int i = 0; i < n; i++) {
+                byte b = buf[i];
+                if (b != 9 && b != 10 && b != 13 && b != 32) bos.write(b);
+            }
+        }
+        byte[] d = bos.toByteArray();
+        final int m = 0x5bd1e995;
+        int len = d.length;
+        int h = 1 ^ len;
+        int i = 0;
+        while (len - i >= 4) {
+            int k = (d[i] & 0xff) | ((d[i + 1] & 0xff) << 8) | ((d[i + 2] & 0xff) << 16) | ((d[i + 3] & 0xff) << 24);
+            k *= m;
+            k ^= k >>> 24;
+            k *= m;
+            h = (h * m) ^ k;
+            i += 4;
+        }
+        int rest = len - i;
+        if (rest >= 3) h ^= (d[i + 2] & 0xff) << 16;
+        if (rest >= 2) h ^= (d[i + 1] & 0xff) << 8;
+        if (rest >= 1) { h ^= (d[i] & 0xff); h *= m; }
+        h ^= h >>> 13;
+        h *= m;
+        h ^= h >>> 15;
+        return h & 0xffffffffL;
     }
 
     private static void addMatches(String text, Set<String> into) {

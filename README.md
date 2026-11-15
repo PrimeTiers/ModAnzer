@@ -103,7 +103,7 @@ Jars in one level of subfolders (for example `mods\1.21\`) are included too.
 ## What it does
 
 1. Hashes every `.jar` with SHA1.
-2. Looks the hashes up on Modrinth in one batched request, then on Megabase for anything Modrinth doesn't know. With a CurseForge API key (see below), it also checks CurseForge by fingerprint. Only hashes leave your PC, never files.
+2. Looks the hashes up on Modrinth in one batched request, then on Megabase and CurseForge for anything Modrinth doesn't know. Only hashes and fingerprints leave your PC, never files.
 3. Opens each unrecognised jar in memory, including jars nested in `META-INF/jars`, and searches it for cheat module names.
    - **Strong names** such as AutoCrystal, TriggerBot and KillAura count wherever they appear.
    - **Generic names** (Velocity, Hitboxes, AimAssist, AutoArmor, FastPlace) are also ordinary game-code words, like `getVelocity` in physics mods, so they only count when they are a whole name on their own: a class called `Velocity.class` or `VelocityModule.class`, or the exact text `Velocity` stored as a separate string. That's how cheat module names look.
@@ -126,8 +126,12 @@ You can edit the file on GitHub, even from a phone, and the script and app pick 
 
 ### CurseForge
 
-- **[CF] results** come from the CurseForge app's own install record (`minecraftinstance.json`) and work without any setup. They're still scanned for cheat names, so a cheat added to that record still shows as `[CHEAT]`.
-- **Full CurseForge lookups** need a free API key from [console.curseforge.com](https://console.curseforge.com). Put it in `$CurseForgeApiKey` near the top of `ModAnzer.ps1`, or set the `MODANZER_CF_KEY` environment variable. CurseForge's terms say not to share your key, so keep it out of copies you send to other people if you'd rather not expose it.
+Mods are checked against CurseForge's database by fingerprint, like they are on Modrinth and Megabase, and matches show as `[OK] Name [CurseForge]`.
+
+CurseForge requires an API key and asks that it be kept private, so the lookups go through a small server function ([`supabase/functions/modanzer-cf`](supabase/functions/modanzer-cf/index.ts)) that holds the key. The script and app send it only CurseForge fingerprints, which are numbers. It can only do fingerprint lookups and rate-limits each IP address. The key is stored as the `CURSEFORGE_API_KEY` secret in the Supabase project, never in this repo or the downloads.
+
+- **[CF] results** come from the CurseForge app's own install record (`minecraftinstance.json`) and still work if the server is down. They're still scanned for cheat names, so a cheat added to that record still shows as `[CHEAT]`.
+- To ask CurseForge directly with your own key instead, put it in `$CurseForgeApiKey` near the top of `ModAnzer.ps1` or set the `MODANZER_CF_KEY` environment variable.
 
 ## Changes from HabibiModAnalyzer
 
