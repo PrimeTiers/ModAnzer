@@ -50,7 +50,7 @@ param(
     [switch]$Offline,
     [switch]$SkipIntro,
     [switch]$NoPause,
-    [ValidateSet('mods', 'injection')][string]$Mode,
+    [string]$Mode = '',
     [int]$LiveSeconds = 0
 )
 
@@ -616,6 +616,11 @@ function Start-InjectionChecker {
 }
 
 # ---------------------------------------------------------------- start menu
+
+if ($Mode -and $Mode -notin @('mods', 'injection')) {
+    Write-Host "Unknown -Mode '$Mode'. Use -Mode mods or -Mode injection." -ForegroundColor Red
+    $Mode = ''
+}
 
 if (-not $Mode) {
     if ($Path) { $Mode = 'mods' }
