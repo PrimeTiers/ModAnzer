@@ -90,6 +90,7 @@ public class MainActivity extends Activity {
     static {
         // TRUSTED.put("sha1-in-lowercase", "Name");
         TRUSTED.put("1807bd0592525fe40d0d0ee69d30b7486c48fdc7", "FastClient HUD 1.21.11");
+        TRUSTED.put("34911f6d85906b40ca45e7750c65b713955451d2", "Dawn Client");
     }
 
     private static final Set<String> MOD_DIRS = new HashSet<>(Arrays.asList("mods", "user-mods"));
