@@ -12,7 +12,7 @@
         and any "dot" client folder (.badlion, ...) - no path pasting needed.
       * Also picks up the game folder of any Minecraft that is running right now.
       * Hashes each .jar (SHA1) and looks the hashes up on Modrinth (batched) and
-        Megabase (and CurseForge with an API key). Only hashes are sent - never your files.
+        Megabase and CurseForge. Only hashes/fingerprints are sent - never your files.
       * Mods that are not recognised are opened in memory (no temp extraction) and
         searched, including nested jars, for well-known cheat module names.
 
@@ -105,9 +105,13 @@ $TrustedMods = @{
 # versions can be added by editing trusted.txt on GitHub (no script change needed).
 $TrustedListUrl = 'https://raw.githubusercontent.com/napatc1/ModAnzer/main/trusted.txt'
 
-# Optional CurseForge API key (free at https://console.curseforge.com). With a key,
-# mods are also checked against CurseForge by fingerprint. Can also be set with the
-# MODANZER_CF_KEY environment variable.
+# CurseForge lookups go through ModAnzer's small server, which keeps the CurseForge
+# API key private (source: supabase/functions/modanzer-cf in the repo). Only CurseForge
+# file fingerprints (numbers) are sent.
+$CurseForgeProxyUrl = 'https://flifswwrhevzjwwhqitc.supabase.co/functions/v1/modanzer-cf'
+
+# Optional: your own CurseForge API key (free at https://console.curseforge.com) to ask
+# CurseForge directly instead. Can also be set with the MODANZER_CF_KEY environment variable.
 $CurseForgeApiKey = ''
 
 # Folder names that hold mods
@@ -317,7 +321,7 @@ if (-not $SkipIntro) {
     Write-Host '  Mod Analyzer' -ForegroundColor White
     Write-Host '  - Finds your Minecraft mods folders (or the one you choose)' -ForegroundColor Gray
     Write-Host '  - Makes a fingerprint (SHA1 hash) of each .jar mod file' -ForegroundColor Gray
-    Write-Host '  - Looks those fingerprints up on Modrinth and Megabase to name your mods' -ForegroundColor Gray
+    Write-Host '  - Looks those fingerprints up on Modrinth, Megabase and CurseForge to name your mods' -ForegroundColor Gray
     Write-Host '  - Searches mods it does not recognise for known cheat names' -ForegroundColor Gray
     Write-Host '  Injection Checker' -ForegroundColor White
     Write-Host '  - Reads how the running Minecraft was started (its launch options)' -ForegroundColor Gray
@@ -863,9 +867,9 @@ foreach ($h in $hashes) {
     if ($TrustedMods.ContainsKey($h)) { $known[$h] = "$($TrustedMods[$h]) (trusted)" }
 }
 
-# CurseForge by fingerprint (only with an API key)
+# CurseForge by fingerprint
 if (-not $CurseForgeApiKey -and $env:MODANZER_CF_KEY) { $CurseForgeApiKey = $env:MODANZER_CF_KEY }
-if (-not $Offline -and $CurseForgeApiKey) {
+if (-not $Offline -and ($CurseForgeApiKey -or $CurseForgeProxyUrl)) {
     $left = @($hashes | Where-Object { -not $known.ContainsKey($_) })
     if ($left.Count -gt 0) {
         $hashByFp = @{}
@@ -876,28 +880,42 @@ if (-not $Offline -and $CurseForgeApiKey) {
             $file = ($jars | Where-Object { $_.Hash -eq $h } | Select-Object -First 1).File
             try { $hashByFp[[string](Get-CurseForgeFingerprint $file.FullName)] = $h } catch {}
         }
+        Write-Host "`r[*] Checking $($hashByFp.Count) mods on CurseForge...            " -ForegroundColor Yellow -NoNewline
+        $fpList = @($hashByFp.Keys | ForEach-Object { [uint32]$_ })
         try {
-            $cfHeaders = @{ 'x-api-key' = $CurseForgeApiKey; 'Accept' = 'application/json' }
-            $body = @{ fingerprints = @($hashByFp.Keys | ForEach-Object { [uint32]$_ }) } | ConvertTo-Json -Compress
-            $r = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/fingerprints/432' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
-            $modIdByHash = @{}
-            foreach ($m in @($r.data.exactMatches)) {
-                $fp = [string]$m.file.fileFingerprint
-                if ($hashByFp.ContainsKey($fp)) { $modIdByHash[$hashByFp[$fp]] = $m.file.modId }
+            $nameByFp = @{}
+            if ($CurseForgeApiKey) {
+                $cfHeaders = @{ 'x-api-key' = $CurseForgeApiKey; 'Accept' = 'application/json' }
+                $body = @{ fingerprints = $fpList } | ConvertTo-Json -Compress
+                $r = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/fingerprints/432' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
+                $modIdByFp = @{}
+                foreach ($m in @($r.data.exactMatches)) { $modIdByFp[[string]$m.file.fileFingerprint] = $m.file.modId }
+                if ($modIdByFp.Count -gt 0) {
+                    $body = @{ modIds = @($modIdByFp.Values | Select-Object -Unique) } | ConvertTo-Json -Compress
+                    $mods = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/mods' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
+                    $nameById = @{}
+                    foreach ($mod in @($mods.data)) { $nameById[[string]$mod.id] = $mod.name }
+                    foreach ($fp in $modIdByFp.Keys) { $nameByFp[$fp] = $nameById[[string]$modIdByFp[$fp]] }
+                }
+            } else {
+                for ($n = 0; $n -lt $fpList.Count; $n += 1000) {
+                    $chunk = @($fpList[$n..([math]::Min($n + 999, $fpList.Count - 1))])
+                    $body = @{ fingerprints = $chunk } | ConvertTo-Json -Compress
+                    $r = Invoke-RestMethod -Uri $CurseForgeProxyUrl -Method Post -Body $body -ContentType 'application/json' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
+                    foreach ($prop in $r.matches.PSObject.Properties) { $nameByFp[$prop.Name] = $prop.Value.name }
+                }
             }
-            if ($modIdByHash.Count -gt 0) {
-                $body = @{ modIds = @($modIdByHash.Values | Select-Object -Unique) } | ConvertTo-Json -Compress
-                $mods = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/mods' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
-                $nameById = @{}
-                foreach ($mod in @($mods.data)) { $nameById[[string]$mod.id] = $mod.name }
-                foreach ($h in $modIdByHash.Keys) {
-                    $n = $nameById[[string]$modIdByHash[$h]]
+            foreach ($fp in $nameByFp.Keys) {
+                if ($hashByFp.ContainsKey($fp)) {
+                    $n = $nameByFp[$fp]
                     if (-not $n) { $n = '(CurseForge project)' }
-                    $known[$h] = "$n [CurseForge]"
+                    $known[$hashByFp[$fp]] = "$n [CurseForge]"
                 }
             }
         } catch {
-            Write-Host "`r[!] CurseForge lookup failed: $($_.Exception.Message)" -ForegroundColor Red
+            $msg = $_.Exception.Message
+            try { if ($_.ErrorDetails.Message) { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error } } catch {}
+            Write-Host "`r[!] CurseForge lookup failed: $msg" -ForegroundColor Red
         }
     }
 }
