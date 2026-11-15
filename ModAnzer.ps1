@@ -27,6 +27,14 @@
 .PARAMETER SkipIntro
     Don't show the "what this script does" notice or wait for Enter.
 
+.PARAMETER Mode
+    'mods' for the Mod Analyzer or 'injection' for the Injection Checker,
+    skipping the start menu.
+
+.PARAMETER LiveSeconds
+    Injection Checker: stop the live watch after this many seconds
+    (default: keep watching until you press Q).
+
 .PARAMETER NoPause
     Don't wait for Enter at the end (by default it waits, so the window
     stays open when started with right-click > Run with PowerShell).
@@ -41,7 +49,9 @@ param(
     [string[]]$Path,
     [switch]$Offline,
     [switch]$SkipIntro,
-    [switch]$NoPause
+    [switch]$NoPause,
+    [ValidateSet('mods', 'injection')][string]$Mode,
+    [int]$LiveSeconds = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -299,21 +309,26 @@ function Invoke-Json([string]$uri, [string]$method = 'Get', $body = $null) {
 
 Clear-Host
 Write-Host 'ModAnzer' -ForegroundColor Yellow -NoNewline
-Write-Host '  - Minecraft mod analyzer (based on HabibiModAnalyzer by HadronCollision)' -ForegroundColor DarkGray
+Write-Host '  - Minecraft mod analyzer + injection checker (based on HabibiModAnalyzer by HadronCollision)' -ForegroundColor DarkGray
 Write-Host
 
 if (-not $SkipIntro) {
     Write-Host 'This is NOT a hacking or malware tool. It is read-only and only:' -ForegroundColor White
+    Write-Host '  Mod Analyzer' -ForegroundColor White
     Write-Host '  - Finds your Minecraft mods folders (or the one you choose)' -ForegroundColor Gray
-    Write-Host '  - Checks which Minecraft is running and how long it has been open' -ForegroundColor Gray
     Write-Host '  - Makes a fingerprint (SHA1 hash) of each .jar mod file' -ForegroundColor Gray
     Write-Host '  - Looks those fingerprints up on Modrinth and Megabase to name your mods' -ForegroundColor Gray
     Write-Host '  - Searches mods it does not recognise for known cheat names' -ForegroundColor Gray
-    Write-Host '  - Shows the results on this screen' -ForegroundColor Gray
+    Write-Host '  Injection Checker' -ForegroundColor White
+    Write-Host '  - Reads how the running Minecraft was started (its launch options)' -ForegroundColor Gray
+    Write-Host '  - Lists the DLL files loaded into Minecraft and watches for new ones' -ForegroundColor Gray
+    Write-Host '  - Watches the mods folder and newly started programs while it runs' -ForegroundColor Gray
+    Write-Host '  Both show the results on this screen only.' -ForegroundColor Gray
     Write-Host
     Write-Host 'It does NOT:' -ForegroundColor White
     Write-Host '  - Upload your files, or send anything except the mod fingerprints' -ForegroundColor Gray
     Write-Host '  - Read passwords, tokens, browser data, Discord or launcher accounts' -ForegroundColor Gray
+    Write-Host '  - Read or change the game''s memory, or interfere with any program' -ForegroundColor Gray
     Write-Host '  - Change, move or delete any files' -ForegroundColor Gray
     Write-Host '  - Install anything or change any settings' -ForegroundColor Gray
     Write-Host
@@ -321,6 +336,304 @@ if (-not $SkipIntro) {
     Write-Host
     Read-Host 'Press Enter to start (or Ctrl+C to quit)' | Out-Null
     Write-Host
+}
+
+# ---------------------------------------------------------------- injection checker
+
+function Get-MinecraftProcesses {
+    $list = @()
+    $cim = $null
+    try { $cim = @(Get-CimInstance Win32_Process -Filter "Name='javaw.exe' OR Name='java.exe'" -ErrorAction Stop) } catch {}
+    if ($null -ne $cim) {
+        foreach ($p in $cim) {
+            $list += [PSCustomObject]@{ Pid = [int]$p.ProcessId; Path = [string]$p.ExecutablePath; CommandLine = [string]$p.CommandLine; Started = $p.CreationDate }
+        }
+    } else {
+        foreach ($p in @(Get-Process -Name 'javaw', 'java' -ErrorAction SilentlyContinue)) {
+            $list += [PSCustomObject]@{ Pid = $p.Id; Path = [string]$p.Path; CommandLine = [string]$p.CommandLine; Started = $p.StartTime }
+        }
+    }
+    return @($list | Where-Object { $_.CommandLine -match 'minecraft|fabric|forge|quilt|lunar|feather|dawn|--gameDir|--accessToken' })
+}
+
+function Get-ProcessModuleFiles([int]$procId) {
+    try {
+        $p = Get-Process -Id $procId -ErrorAction Stop
+        return @($p.Modules | ForEach-Object { $_.FileName } | Where-Object { $_ } | Select-Object -Unique)
+    } catch { return $null }
+}
+
+$script:SignerCache = @{}
+function Get-Signer([string]$file) {
+    if ($script:SignerCache.ContainsKey($file)) { return $script:SignerCache[$file] }
+    $r = $null
+    try {
+        $sig = Get-AuthenticodeSignature -LiteralPath $file -ErrorAction Stop
+        if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate) {
+            $r = $sig.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+        }
+    } catch {}
+    $script:SignerCache[$file] = $r
+    return $r
+}
+
+function Test-UnderPath([string]$file, [string[]]$roots) {
+    foreach ($r in $roots) {
+        if ($r -and $file.StartsWith($r.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+# Folders that normal programs aren't run or loaded from
+function Get-UserDropFolders {
+    $h = $env:USERPROFILE
+    return @("$h\Downloads", "$h\Desktop", "$h\Documents", $env:TEMP, "$env:LOCALAPPDATA\Temp", "$h\Videos", "$h\Music", "$h\Pictures") |
+        Where-Object { $_ } | ForEach-Object { $_.Replace('\', [IO.Path]::DirectorySeparatorChar) } | Select-Object -Unique
+}
+
+# Classify one DLL loaded into Minecraft. Returns $null when it's a normal Windows/Java/game file.
+function Get-ModuleVerdict([string]$file, [string]$javaHome) {
+    if (-not [IO.Path]::IsPathRooted($file)) { return $null }
+    $name = [IO.Path]::GetFileName($file).ToLowerInvariant()
+    if ($name -match '^(lib)?instrument\.(dll|so|dylib)$') {
+        return [PSCustomObject]@{ Level = 'Red'; Text = 'Java agent support (instrument) is loaded - a Java agent was added at launch or attached to the running game' }
+    }
+    if ($name -match '^(lib)?jdwp\.(dll|so|dylib)$') {
+        return [PSCustomObject]@{ Level = 'Red'; Text = 'Java debugger (JDWP) is loaded - lets other programs change the game while it runs' }
+    }
+    $sysRoots = @($env:SystemRoot, $env:windir, ${env:ProgramFiles}, ${env:ProgramFiles(x86)}, $javaHome, '/usr/lib', '/lib', '/usr/lib64', '/lib64')
+    $drop = Get-UserDropFolders
+    $inDrop = Test-UnderPath $file $drop
+    # LWJGL / game natives that Minecraft itself unpacks (often into Temp)
+    $isGameNative = ($name -match '^(lib)?(lwjgl|glfw|openal|jemalloc|jinput|jnidispatch|sqlite|discord[-_]?(rpc|game-sdk)|flite|tinyfd|stb|opengl|opus|rnnoise|speex|lame|vosk)') -and
+                    ($file -match '[\\/](lwjgl|natives|bin|\.minecraft|jna|versions|libraries|voicechat|opus)[^\\/]*[\\/]' -or $file -match 'lwjgl|jna|voicechat')
+    if ($isGameNative) { return $null }
+    if ((Test-UnderPath $file $sysRoots) -and -not $inDrop) { return $null }
+
+    $signer = Get-Signer $file
+    if ($inDrop) {
+        $where = if ($signer) { "signed by $signer" } else { 'not signed' }
+        return [PSCustomObject]@{ Level = 'Red'; Text = "loaded from a user folder ($where)" }
+    }
+    if (-not $signer) { return [PSCustomObject]@{ Level = 'Red'; Text = 'not signed by any publisher' } }
+    return [PSCustomObject]@{ Level = 'Yellow'; Text = "signed by $signer (overlays like Discord, OBS, NVIDIA or Steam look like this)" }
+}
+
+function Get-LaunchFlags([string]$cmd) {
+    $flags = @()
+    foreach ($m in [regex]::Matches($cmd, '-javaagent:(?:"([^"]+)"|(\S+))')) {
+        $v = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
+        $flags += "Java agent at launch: $v   (normal for Lunar's own agents, suspicious otherwise)"
+    }
+    foreach ($m in [regex]::Matches($cmd, '-(agentpath|agentlib):(?:"([^"]+)"|(\S+))')) {
+        $v = if ($m.Groups[2].Success) { $m.Groups[2].Value } else { $m.Groups[3].Value }
+        $flags += "Native agent at launch (-$($m.Groups[1].Value)): $v"
+    }
+    foreach ($m in [regex]::Matches($cmd, '-D(fabric\.addMods|fabric\.loadMods|fml\.coreMods\.load|fml\.modFolders|forge\.mods|fml\.mods)=(?:"([^"]+)"|(\S+))')) {
+        $v = if ($m.Groups[2].Success) { $m.Groups[2].Value } else { $m.Groups[3].Value }
+        $flags += "Extra mods loaded from outside the mods folder (-D$($m.Groups[1].Value)): $v"
+    }
+    if ($cmd -match '-Xrunjdwp|-Xdebug') { $flags += 'Started with the Java debugger turned on (-Xdebug / -Xrunjdwp)' }
+    if ($cmd -match '(^|\s)(-noverify|-Xverify:none)(\s|$)') { $flags += 'Bytecode verifier turned off (-noverify) - often needed by injected clients' }
+    return $flags
+}
+
+function Get-GameDirFromCommand([string]$cmd) {
+    if ($cmd -match '--gameDir\s+(?:"([^"]+)"|(\S+))') { if ($Matches[1]) { return $Matches[1] } else { return $Matches[2] } }
+    return $null
+}
+
+function Get-ModJarSet([string]$gameDir) {
+    $set = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    if ($gameDir) {
+        $mods = Join-Path $gameDir 'mods'
+        if (Test-Path -LiteralPath $mods) {
+            Get-ChildItem -LiteralPath $mods -Filter *.jar -File -Recurse -Depth 1 -ErrorAction SilentlyContinue | ForEach-Object { [void]$set.Add($_.FullName) }
+        }
+    }
+    return ,$set
+}
+
+function Write-Alert([string]$level, [string]$text, $alerts) {
+    $color = switch ($level) { 'Red' { 'Red' } 'Yellow' { 'Yellow' } default { 'Gray' } }
+    $stamp = (Get-Date).ToString('HH:mm:ss')
+    Write-Host "`r$(' ' * 100)`r" -NoNewline
+    Write-Host "  [$stamp] " -ForegroundColor DarkGray -NoNewline
+    Write-Host $text -ForegroundColor $color
+    if ($null -ne $alerts) { $alerts.Add([PSCustomObject]@{ Time = $stamp; Level = $level; Text = $text }) }
+}
+
+function Start-InjectionChecker {
+    Write-Section 'Injection Checker'
+    $procs = @(Get-MinecraftProcesses)
+    while ($procs.Count -eq 0) {
+        $in = Read-Host 'No running Minecraft found. Start the game, then press Enter to look again (Q to quit)'
+        if ($in -match '^\s*[qQ]') { return }
+        $procs = @(Get-MinecraftProcesses)
+    }
+    $p = $procs[0]
+    if ($procs.Count -gt 1) {
+        for ($n = 0; $n -lt $procs.Count; $n++) {
+            $gd = Get-GameDirFromCommand $procs[$n].CommandLine
+            Write-Host ('  {0}) PID {1}  {2}' -f ($n + 1), $procs[$n].Pid, $(if ($gd) { Get-ShortPath $gd } else { '' }))
+        }
+        $pick = 0
+        while ($pick -lt 1 -or $pick -gt $procs.Count) { [void][int]::TryParse((Read-Host "Which Minecraft? 1-$($procs.Count)"), [ref]$pick) }
+        $p = $procs[$pick - 1]
+    }
+
+    $gameDir = Get-GameDirFromCommand $p.CommandLine
+    $javaHome = if ($p.Path) { Split-Path -Parent (Split-Path -Parent $p.Path) } else { $null }
+    $up = ''
+    if ($p.Started) { $t = (Get-Date) - $p.Started; $up = ' - up {0}h {1}m {2}s' -f [int][math]::Floor($t.TotalHours), $t.Minutes, $t.Seconds }
+    Write-Host "> Minecraft PID $($p.Pid)$up" -ForegroundColor White
+    if ($gameDir) { Write-Host "  game folder: $(Get-ShortPath $gameDir)" -ForegroundColor Gray }
+    if ($p.Path)  { Write-Host "  java: $(Get-ShortPath $p.Path)" -ForegroundColor Gray }
+    Write-Host
+
+    $alerts = New-Object 'System.Collections.Generic.List[object]'
+
+    # 1. launch options
+    Write-Section 'Launch options'
+    $flags = @(Get-LaunchFlags $p.CommandLine)
+    if ($flags.Count -eq 0) { Write-Host '  Nothing unusual.' -ForegroundColor Green }
+    foreach ($f in $flags) { Write-Alert 'Red' $f $alerts }
+    Write-Host
+
+    # 2. DLLs loaded right now
+    Write-Section 'Loaded DLLs'
+    $baseline = Get-ProcessModuleFiles $p.Pid
+    if ($null -eq $baseline) {
+        Write-Host '  Could not read the loaded DLLs (the game may be running as administrator - run this as administrator too).' -ForegroundColor Red
+        $baseline = @()
+    } else {
+        Write-Host "  $($baseline.Count) loaded. Checking..." -ForegroundColor DarkGray
+        $odd = 0
+        foreach ($m in $baseline) {
+            $v = Get-ModuleVerdict $m $javaHome
+            if ($v) { $odd++; Write-Alert $v.Level "$(Get-ShortPath $m) - $($v.Text)" $alerts }
+        }
+        if ($odd -eq 0) { Write-Host '  All are normal Windows, Java or game files.' -ForegroundColor Green }
+    }
+    Write-Host
+
+    # 3. live watch
+    Write-Section 'Live watch'
+    Write-Host '  Watching for anything injected into the game, mods added or removed, and new programs' -ForegroundColor Gray
+    Write-Host '  started from Downloads/Desktop/Temp. Keep this window open during the fight.' -ForegroundColor Gray
+    if ($LiveSeconds -le 0) { Write-Host '  Press Q to stop.' -ForegroundColor Yellow }
+    Write-Host
+
+    $known = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($m in $baseline) { [void]$known.Add($m) }
+    $jarsNow = Get-ModJarSet $gameDir
+    $seenProcs = New-Object 'System.Collections.Generic.HashSet[int]'
+    foreach ($x in (Get-Process -ErrorAction SilentlyContinue)) { [void]$seenProcs.Add($x.Id) }
+    $drop = Get-UserDropFolders
+    $start = Get-Date
+    $canReadKeys = $true
+    $liveAlerts = 0
+
+    while ($true) {
+        $elapsed = (Get-Date) - $start
+        if ($LiveSeconds -gt 0 -and $elapsed.TotalSeconds -ge $LiveSeconds) { break }
+        if ($canReadKeys) {
+            try {
+                if ([Console]::KeyAvailable) {
+                    $k = [Console]::ReadKey($true)
+                    if ($k.Key -eq 'Q' -or $k.Key -eq 'Escape') { break }
+                }
+            } catch { $canReadKeys = $false }
+        }
+
+        if (-not (Get-Process -Id $p.Pid -ErrorAction SilentlyContinue)) {
+            Write-Alert 'Yellow' 'Minecraft was closed.' $alerts; $liveAlerts++
+            break
+        }
+
+        $now = Get-ProcessModuleFiles $p.Pid
+        if ($null -ne $now) {
+            $nowSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            foreach ($m in $now) {
+                [void]$nowSet.Add($m)
+                if ($known.Add($m)) {
+                    $v = Get-ModuleVerdict $m $javaHome
+                    if ($v) { Write-Alert $v.Level "NEW DLL injected/loaded: $(Get-ShortPath $m) - $($v.Text)" $alerts; $liveAlerts++ }
+                    else { Write-Alert 'Gray' "New DLL loaded: $(Get-ShortPath $m) (normal file)" $null }
+                }
+            }
+            foreach ($m in @($known)) {
+                if (-not $nowSet.Contains($m) -and (Get-ModuleVerdict $m $javaHome)) {
+                    Write-Alert 'Yellow' "DLL unloaded: $(Get-ShortPath $m) (injectors sometimes unload to hide)" $alerts; $liveAlerts++
+                    [void]$known.Remove($m)
+                }
+            }
+        }
+
+        $jarsNew = Get-ModJarSet $gameDir
+        foreach ($j in $jarsNew) { if (-not $jarsNow.Contains($j)) { Write-Alert 'Red' "Mod ADDED while the game is running: $(Get-ShortPath $j)" $alerts; $liveAlerts++ } }
+        foreach ($j in $jarsNow) { if (-not $jarsNew.Contains($j)) { Write-Alert 'Red' "Mod REMOVED while the game is running: $(Get-ShortPath $j)" $alerts; $liveAlerts++ } }
+        $jarsNow = $jarsNew
+
+        foreach ($x in (Get-Process -ErrorAction SilentlyContinue)) {
+            if ($seenProcs.Add($x.Id)) {
+                $xp = $null
+                try { $xp = $x.Path } catch {}
+                if ($xp -and (Test-UnderPath $xp $drop)) {
+                    Write-Alert 'Red' "Program started from a user folder: $(Get-ShortPath $xp) (PID $($x.Id))" $alerts; $liveAlerts++
+                }
+            }
+        }
+
+        $status = '  Watching PID {0} - {1:hh\:mm\:ss} - live alerts: {2}' -f $p.Pid, $elapsed, $liveAlerts
+        Write-Host "`r$status   " -ForegroundColor DarkCyan -NoNewline
+        Start-Sleep -Milliseconds 1500
+    }
+    Write-Host "`r$(' ' * 100)`r" -NoNewline
+    Write-Host
+
+    Write-Section 'Injection Checker summary'
+    $red = @($alerts | Where-Object { $_.Level -eq 'Red' })
+    $yellow = @($alerts | Where-Object { $_.Level -eq 'Yellow' })
+    if ($alerts.Count -eq 0) {
+        Write-Host '  Nothing suspicious found.' -ForegroundColor Green
+    } else {
+        Write-Host "  Suspicious: $($red.Count)" -ForegroundColor $(if ($red.Count) { 'Red' } else { 'Gray' })
+        Write-Host "  Worth a look: $($yellow.Count)" -ForegroundColor $(if ($yellow.Count) { 'Yellow' } else { 'Gray' })
+        Write-Host
+        foreach ($a in $alerts) {
+            Write-Host "  [$($a.Time)] " -ForegroundColor DarkGray -NoNewline
+            Write-Host $a.Text -ForegroundColor $(if ($a.Level -eq 'Red') { 'Red' } else { 'Yellow' })
+        }
+    }
+    Write-Host
+    Write-Host 'This catches common injection (DLLs, Java agents, swapped mods). Cheats loaded straight into memory' -ForegroundColor DarkGray
+    Write-Host 'without a file, or kernel-level cheats, can hide from it. Alerts are leads - check them by hand.' -ForegroundColor DarkGray
+}
+
+# ---------------------------------------------------------------- start menu
+
+if (-not $Mode) {
+    if ($Path) { $Mode = 'mods' }
+    else {
+        Write-Host 'What do you want to do?' -ForegroundColor White
+        Write-Host '  1) ' -ForegroundColor Yellow -NoNewline; Write-Host 'Mod Analyzer       ' -NoNewline; Write-Host '- check the mods in your mods folders  [default]' -ForegroundColor DarkGray
+        Write-Host '  2) ' -ForegroundColor Yellow -NoNewline; Write-Host 'Injection Checker  ' -NoNewline; Write-Host '- watch the running game for injected cheats' -ForegroundColor DarkGray
+        Write-Host
+        while (-not $Mode) {
+            $in = (Read-Host 'Choose 1-2').Trim()
+            if ($in -eq '' -or $in -eq '1') { $Mode = 'mods' }
+            elseif ($in -eq '2') { $Mode = 'injection' }
+            else { Write-Host 'Type 1 or 2.' -ForegroundColor Red }
+        }
+        Write-Host
+    }
+}
+
+if ($Mode -eq 'injection') {
+    Start-InjectionChecker
+    Wait-BeforeClose
+    exit 0
 }
 
 $running = @(Get-RunningGameDirs)

@@ -36,6 +36,27 @@ To start it with a double-click, download **[ModAnzer.ico](https://github.com/na
 
 Make the shortcut on each PC rather than sending a `.lnk` file to someone. A shortcut only points to files on the PC it was made on, so the receiver gets a broken shortcut with no icon. Discord and antivirus tools also often block shortcut files that start PowerShell, because malware spreads that way. To share it, send the [release page](https://github.com/napatc1/ModAnzer/releases/tag/apk) link instead.
 
+## Two tools in one
+
+When it starts, the script asks which tool to use:
+
+```
+  1) Mod Analyzer       - check the mods in your mods folders  [default]
+  2) Injection Checker  - watch the running game for injected cheats
+```
+
+### Injection Checker
+
+Run it while the player is in Minecraft (it works on Windows only):
+
+1. **Launch options:** flags anything that adds code to the game at startup, such as `-javaagent`, `-agentpath`, `fabric.addMods`/`loadMods`, the Java debugger, or `-noverify`. Lunar uses its own Java agents, so check where an agent's file lives before calling it a cheat.
+2. **Loaded DLLs:** lists every DLL inside the game and flags the unusual ones: Java agent support (`instrument.dll`) or the debugger (`jdwp.dll`), DLLs loaded from Downloads/Desktop/Temp, and DLLs that aren't signed by any publisher. Signed DLLs from overlays (Discord, OBS, NVIDIA, Steam) show as "worth a look".
+3. **Live watch:** keeps running during the fight and alerts the moment a new DLL is injected into the game, a flagged DLL unloads, a mod is added to or removed from the mods folder, or a program starts from Downloads/Desktop/Temp. Press **Q** to stop and see the summary.
+
+It only reads the list of loaded DLLs. It never reads or changes the game's memory. Cheats loaded straight into memory without a file, and kernel-level cheats, can hide from it, so treat its alerts as leads. If the game runs as administrator, run the script as administrator too, or it can't see the DLL list.
+
+Use `-Mode injection` to skip the menu, and `-LiveSeconds 300` to stop the watch on its own after 5 minutes.
+
 When it starts, it first shows what it does and doesn't do, and waits for you to press Enter. Then it asks which launcher you use:
 
 ```
@@ -63,6 +84,7 @@ Press Enter for 1. If the launcher you pick has no mods folder in its usual plac
 | `-Path "D:\pack\mods"` | Skip the menu and scan only these folders (can list several, comma-separated) |
 | `-Offline` | Skip the online lookups; only do the cheat-string scan |
 | `-SkipIntro` | Don't show the "what this script does" notice at the start |
+| `-Mode mods` / `-Mode injection` | Skip the start menu and go straight to that tool |
 | `-NoPause` | Don't wait for Enter before closing at the end |
 
 ## Where it looks
