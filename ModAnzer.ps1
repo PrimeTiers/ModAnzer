@@ -77,6 +77,7 @@ $CheatRegex = [regex]::new(($CheatStrings | ForEach-Object { [regex]::Escape($_)
 # pretend to be one of them. Add entries as  'sha1-in-lowercase' = 'Name'
 # (the SHA1 is printed under every [CHEAT] result).
 $TrustedMods = @{
+    '1807bd0592525fe40d0d0ee69d30b7486c48fdc7' = 'FastClient HUD 1.21.11'   # contains Hitboxes/Velocity HUD names
 }
 
 # Folder names that hold mods
