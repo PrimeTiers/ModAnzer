@@ -12,7 +12,7 @@
         and any "dot" client folder (.badlion, ...) - no path pasting needed.
       * Also picks up the game folder of any Minecraft that is running right now.
       * Hashes each .jar (SHA1) and looks the hashes up on Modrinth (batched) and
-        Megabase. Only hashes are sent - never your files.
+        Megabase (and CurseForge with an API key). Only hashes are sent - never your files.
       * Mods that are not recognised are opened in memory (no temp extraction) and
         searched, including nested jars, for well-known cheat module names.
 
@@ -62,15 +62,25 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 # ---------------------------------------------------------------- settings
 
-# Matched case-sensitively, so ordinary words like "velocity" in normal mods don't trigger.
+# Strong names: unusual words that are basically only used by cheats.
+# Matched case-sensitively anywhere in a mod's files.
 $CheatStrings = @(
-    'AimAssist', 'AnchorTweaks', 'AutoAnchor', 'AutoCrystal', 'AutoDoubleHand',
-    'AutoHitCrystal', 'AutoPot', 'AutoTotem', 'AutoArmor', 'InventoryTotem',
-    'Hitboxes', 'JumpReset', 'LegitTotem', 'PingSpoof', 'SelfDestruct',
-    'ShieldBreaker', 'TriggerBot', 'Velocity', 'AxeSpam', 'WebMacro', 'FastPlace',
+    'AnchorTweaks', 'AutoAnchor', 'AutoCrystal', 'AutoDoubleHand', 'AutoHitCrystal',
+    'AutoPot', 'AutoTotem', 'InventoryTotem', 'JumpReset', 'LegitTotem', 'PingSpoof',
+    'SelfDestruct', 'ShieldBreaker', 'TriggerBot', 'AxeSpam', 'WebMacro',
     'KillAura', 'CrystalAura', 'AnchorAura', 'AutoClicker'
 )
 $CheatRegex = [regex]::new(($CheatStrings | ForEach-Object { [regex]::Escape($_) }) -join '|')
+
+# Weak names: also ordinary game-code words (getVelocity, renderHitboxes, controller
+# aim assist...). They only count when they are a whole name on their own: a class
+# file called Velocity.class / VelocityModule.class, or the exact text "Velocity"
+# stored as its own string in a class file - which is how cheat module names look.
+$WeakCheatStrings = @('Velocity', 'Hitboxes', 'AimAssist', 'AutoArmor', 'FastPlace')
+$weakAlt = ($WeakCheatStrings | ForEach-Object { [regex]::Escape($_) }) -join '|'
+$WeakNameRegex = [regex]::new("(?:^|/)($weakAlt)(?:Module|Hack|Feature|Mod)?(?:\$[^/]*)?\.class$")
+# CONSTANT_Utf8 entry in a class file: tag 0x01, 2-byte length, then the text.
+$WeakConstRegex = [regex]::new('\x01\x00(?:' + (($WeakCheatStrings | ForEach-Object { [regex]::Escape([string][char]$_.Length) + [regex]::Escape($_) }) -join '|') + ')(?![\w])')
 
 # Mods known to be safe even though their code contains a cheat-like name (for example a
 # HUD that shows "AutoTotem" status). Matched by exact SHA1 so a renamed cheat can't
@@ -80,6 +90,15 @@ $TrustedMods = @{
     '1807bd0592525fe40d0d0ee69d30b7486c48fdc7' = 'FastClient HUD 1.21.11'   # contains Hitboxes/Velocity HUD names
     '34911f6d85906b40ca45e7750c65b713955451d2' = 'Dawn Client'              # contains Hitboxes/Velocity HUD names
 }
+
+# Extra trusted mods are also read from this file in the GitHub repo, so new
+# versions can be added by editing trusted.txt on GitHub (no script change needed).
+$TrustedListUrl = 'https://raw.githubusercontent.com/napatc1/ModAnzer/main/trusted.txt'
+
+# Optional CurseForge API key (free at https://console.curseforge.com). With a key,
+# mods are also checked against CurseForge by fingerprint. Can also be set with the
+# MODANZER_CF_KEY environment variable.
+$CurseForgeApiKey = ''
 
 # Folder names that hold mods
 $ModFolderNames = @('mods', 'user-mods')
@@ -192,6 +211,8 @@ function Search-Jar([IO.Stream]$stream, [string]$label, [System.Collections.Gene
         $found = New-Object 'System.Collections.Generic.HashSet[string]'
         foreach ($entry in $zip.Entries) {
             foreach ($m in $CheatRegex.Matches($entry.FullName)) { [void]$found.Add($m.Value) }
+            $wm = $WeakNameRegex.Match($entry.FullName)
+            if ($wm.Success) { [void]$found.Add($wm.Groups[1].Value) }
 
             if ($entry.Length -eq 0 -or $entry.Length -gt $MaxEntryBytes) { continue }
             $lower = $entry.FullName.ToLowerInvariant()
@@ -206,12 +227,59 @@ function Search-Jar([IO.Stream]$stream, [string]$label, [System.Collections.Gene
             if ($lower.EndsWith('.class') -or $lower.EndsWith('.json') -or $lower.EndsWith('.toml') -or $lower.EndsWith('.mf')) {
                 $text = $latin1.GetString((Read-EntryBytes $entry))
                 foreach ($m in $CheatRegex.Matches($text)) { [void]$found.Add($m.Value) }
+                if ($lower.EndsWith('.class')) {
+                    foreach ($m in $WeakConstRegex.Matches($text)) { [void]$found.Add($m.Value.Substring(3)) }
+                }
             }
         }
         if ($found.Count -gt 0) {
             $hits.Add([PSCustomObject]@{ Where = $label; Strings = (@($found) | Sort-Object) })
         }
     } finally { $zip.Dispose() }
+}
+
+# CurseForge fingerprint: MurmurHash2 (seed 1) of the file with tab/LF/CR/space bytes removed.
+function Get-CurseForgeFingerprint([string]$path) {
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $data = $latin1.GetBytes(($latin1.GetString([IO.File]::ReadAllBytes($path)) -replace "[\t\n\r ]", ''))
+    $mask = [uint64]4294967295
+    $m = [uint64]0x5bd1e995
+    $len = $data.Length
+    $h = ([uint64]1 -bxor [uint64]$len) -band $mask
+    $i = 0
+    while ($len - $i -ge 4) {
+        $k = [uint64][BitConverter]::ToUInt32($data, $i)
+        $k = ($k * $m) -band $mask
+        $k = $k -bxor ($k -shr 24)
+        $k = ($k * $m) -band $mask
+        $h = (($h * $m) -band $mask) -bxor $k
+        $i += 4
+    }
+    $rest = $len - $i
+    if ($rest -ge 3) { $h = $h -bxor ([uint64]$data[$i + 2] -shl 16) }
+    if ($rest -ge 2) { $h = $h -bxor ([uint64]$data[$i + 1] -shl 8) }
+    if ($rest -ge 1) { $h = (($h -bxor [uint64]$data[$i]) * $m) -band $mask }
+    $h = $h -bxor ($h -shr 13)
+    $h = ($h * $m) -band $mask
+    $h = $h -bxor ($h -shr 15)
+    return [uint32]$h
+}
+
+# Mods the CurseForge app recorded as installed (minecraftinstance.json next to the mods folder).
+function Get-CurseForgeRecords([string]$modsFolder) {
+    $map = @{}
+    $json = Join-Path (Split-Path -Parent $modsFolder) 'minecraftinstance.json'
+    if (-not (Test-Path -LiteralPath $json)) { return $map }
+    try {
+        $inst = Get-Content -Raw -LiteralPath $json | ConvertFrom-Json
+        foreach ($a in @($inst.installedAddons)) {
+            $f = $a.installedFile
+            if ($f -and $f.fileName -and $a.name) {
+                $map[[string]$f.fileName] = [PSCustomObject]@{ Name = [string]$a.name; Length = $f.fileLength }
+            }
+        }
+    } catch {}
+    return $map
 }
 
 function Wait-BeforeClose {
@@ -470,8 +538,55 @@ if (-not $Offline -and $hashes.Count -gt 0) {
     }
 }
 
+if (-not $Offline) {
+    try {
+        $list = Invoke-RestMethod -Uri $TrustedListUrl -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 15
+        foreach ($line in ([string]$list -split "`n")) {
+            if ($line -match '^\s*([0-9a-fA-F]{40})\s+(.+?)\s*$') { $TrustedMods[$Matches[1].ToLowerInvariant()] = $Matches[2] }
+        }
+    } catch {}
+}
 foreach ($h in $hashes) {
     if ($TrustedMods.ContainsKey($h)) { $known[$h] = "$($TrustedMods[$h]) (trusted)" }
+}
+
+# CurseForge by fingerprint (only with an API key)
+if (-not $CurseForgeApiKey -and $env:MODANZER_CF_KEY) { $CurseForgeApiKey = $env:MODANZER_CF_KEY }
+if (-not $Offline -and $CurseForgeApiKey) {
+    $left = @($hashes | Where-Object { -not $known.ContainsKey($_) })
+    if ($left.Count -gt 0) {
+        $hashByFp = @{}
+        $i = 0
+        foreach ($h in $left) {
+            $i++
+            Write-Host "`r[*] CurseForge fingerprint $i / $($left.Count)              " -ForegroundColor Yellow -NoNewline
+            $file = ($jars | Where-Object { $_.Hash -eq $h } | Select-Object -First 1).File
+            try { $hashByFp[[string](Get-CurseForgeFingerprint $file.FullName)] = $h } catch {}
+        }
+        try {
+            $cfHeaders = @{ 'x-api-key' = $CurseForgeApiKey; 'Accept' = 'application/json' }
+            $body = @{ fingerprints = @($hashByFp.Keys | ForEach-Object { [uint32]$_ }) } | ConvertTo-Json -Compress
+            $r = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/fingerprints/432' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
+            $modIdByHash = @{}
+            foreach ($m in @($r.data.exactMatches)) {
+                $fp = [string]$m.file.fileFingerprint
+                if ($hashByFp.ContainsKey($fp)) { $modIdByHash[$hashByFp[$fp]] = $m.file.modId }
+            }
+            if ($modIdByHash.Count -gt 0) {
+                $body = @{ modIds = @($modIdByHash.Values | Select-Object -Unique) } | ConvertTo-Json -Compress
+                $mods = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/mods' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
+                $nameById = @{}
+                foreach ($mod in @($mods.data)) { $nameById[[string]$mod.id] = $mod.name }
+                foreach ($h in $modIdByHash.Keys) {
+                    $n = $nameById[[string]$modIdByHash[$h]]
+                    if (-not $n) { $n = '(CurseForge project)' }
+                    $known[$h] = "$n [CurseForge]"
+                }
+            }
+        } catch {
+            Write-Host "`r[!] CurseForge lookup failed: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
 }
 
 # ---------------------------------------------------------------- 4. scan unknown jars
@@ -497,10 +612,26 @@ Write-Host "`r$(' ' * 80)`r" -NoNewline
 
 # ---------------------------------------------------------------- 5. report
 
-$totalCheat = 0; $totalUnknown = 0; $totalVerified = 0
+$totalCheat = 0; $totalUnknown = 0; $totalVerified = 0; $totalCf = 0
+$cheatList = New-Object 'System.Collections.Generic.List[object]'
+
+# "Launcher > instance" for a mods folder, e.g. "Modrinth > Atzlk_s PMW"
+function Get-InstanceLabel([string]$modsFolder) {
+    $launcher = Get-LauncherName $modsFolder
+    $parent = Split-Path -Parent $modsFolder
+    $inst = Split-Path -Leaf $parent
+    if ($inst -in @('.minecraft', 'minecraft', '')) {
+        $up = Split-Path -Leaf (Split-Path -Parent $parent)
+        if ($up -and $up -notin @('Roaming', 'AppData') -and -not $up.StartsWith('.')) { $inst = $up } else { $inst = $null }
+    }
+    if ($inst -and $inst.StartsWith('.')) { $inst = $null }
+    if ($inst -and $inst -ne $launcher -and ".$inst" -ne $launcher -and $inst -ne ".$launcher".TrimStart('.')) { return "$launcher > $inst" }
+    return $launcher
+}
 
 foreach ($f in $withJars) {
     Write-Section "$(Get-LauncherName $f)  $(Get-ShortPath $f)"
+    $cfRecords = Get-CurseForgeRecords $f
     $here = @($jars | Where-Object { $_.Folder -eq $f } | Sort-Object { $_.File.Name })
 
     foreach ($j in $here) {
@@ -521,6 +652,13 @@ foreach ($f in $withJars) {
                 Write-Host ($hit.Strings -join ', ') -ForegroundColor Magenta
             }
             Write-Host "          sha1: $($j.Hash)" -ForegroundColor DarkGray
+            $allStrings = @($hits | ForEach-Object { $_.Strings } | Select-Object -Unique)
+            $cheatList.Add([PSCustomObject]@{ Name = $name; Where = (Get-InstanceLabel $f); Strings = ($allStrings -join ', ') })
+        } elseif ($cfRecords.ContainsKey($name) -and (-not $cfRecords[$name].Length -or [int64]$cfRecords[$name].Length -eq $j.File.Length)) {
+            # Installed by the CurseForge app and no cheat names inside.
+            $totalCf++
+            Write-Host ('  [CF]    {0,-32}' -f $cfRecords[$name].Name) -ForegroundColor Cyan -NoNewline
+            Write-Host $name -ForegroundColor DarkGray
         } else {
             $totalUnknown++
             Write-Host "  [?]     $name" -ForegroundColor DarkYellow
@@ -533,9 +671,22 @@ foreach ($f in $withJars) {
 
 Write-Section 'Summary'
 Write-Host "  Verified: $totalVerified" -ForegroundColor Green
+if ($totalCf -gt 0) { Write-Host "  CF app:   $totalCf  (installed by the CurseForge app, no cheat names found)" -ForegroundColor Cyan }
 Write-Host "  Unknown:  $totalUnknown" -ForegroundColor DarkYellow
 Write-Host "  Cheat:    $totalCheat"   -ForegroundColor $(if ($totalCheat -gt 0) { 'Red' } else { 'Gray' })
 if ($Offline) { Write-Host '  (offline mode - no online lookups were made)' -ForegroundColor DarkGray }
+
+if ($cheatList.Count -gt 0) {
+    Write-Host
+    Write-Section "Cheats found ($($cheatList.Count))"
+    foreach ($group in ($cheatList | Group-Object Where)) {
+        Write-Host "  $($group.Name)" -ForegroundColor White
+        foreach ($c in $group.Group) {
+            Write-Host "    [CHEAT] $($c.Name)  " -ForegroundColor Red -NoNewline
+            Write-Host $c.Strings -ForegroundColor Magenta
+        }
+    }
+}
 Write-Host
-Write-Host 'Unknown does not mean cheat - it just is not on Modrinth/Megabase. Cheat hits are name matches; check them by hand.' -ForegroundColor DarkGray
+Write-Host 'Unknown does not mean cheat - it just is not on Modrinth/Megabase/CurseForge. Cheat hits are name matches; check them by hand.' -ForegroundColor DarkGray
 Wait-BeforeClose

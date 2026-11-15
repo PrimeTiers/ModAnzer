@@ -65,15 +65,19 @@ public class MainActivity extends Activity {
     private static final int REQ_TREE = 1;
     private static final int REQ_FILES = 2;
 
-    // Matched case-sensitively so ordinary words like "velocity" don't trigger.
+    // Strong names: basically only used by cheats. Matched case-sensitively anywhere.
+    // Keep in sync with $CheatStrings in ModAnzer.ps1.
     private static final String[] CHEATS = {
-            "AimAssist", "AnchorTweaks", "AutoAnchor", "AutoCrystal", "AutoDoubleHand",
-            "AutoHitCrystal", "AutoPot", "AutoTotem", "AutoArmor", "InventoryTotem",
-            "Hitboxes", "JumpReset", "LegitTotem", "PingSpoof", "SelfDestruct",
-            "ShieldBreaker", "TriggerBot", "Velocity", "AxeSpam", "WebMacro", "FastPlace",
+            "AnchorTweaks", "AutoAnchor", "AutoCrystal", "AutoDoubleHand", "AutoHitCrystal",
+            "AutoPot", "AutoTotem", "InventoryTotem", "JumpReset", "LegitTotem", "PingSpoof",
+            "SelfDestruct", "ShieldBreaker", "TriggerBot", "AxeSpam", "WebMacro",
             "KillAura", "CrystalAura", "AnchorAura", "AutoClicker"
     };
-    private static final Pattern CHEAT_RE;
+    // Weak names: also ordinary game-code words (getVelocity...). They only count as a
+    // whole class name (Velocity.class, VelocityModule.class) or as an exact string
+    // constant in a class file. Keep in sync with $WeakCheatStrings in ModAnzer.ps1.
+    private static final String[] WEAK = {"Velocity", "Hitboxes", "AimAssist", "AutoArmor", "FastPlace"};
+    private static final Pattern CHEAT_RE, WEAK_NAME_RE, WEAK_CONST_RE;
     static {
         StringBuilder b = new StringBuilder();
         for (String c : CHEATS) {
@@ -81,7 +85,16 @@ public class MainActivity extends Activity {
             b.append(Pattern.quote(c));
         }
         CHEAT_RE = Pattern.compile(b.toString());
+        StringBuilder w = new StringBuilder(), wc = new StringBuilder();
+        for (String c : WEAK) {
+            if (w.length() > 0) { w.append('|'); wc.append('|'); }
+            w.append(Pattern.quote(c));
+            wc.append(Pattern.quote(String.valueOf((char) c.length()) + c));
+        }
+        WEAK_NAME_RE = Pattern.compile("(?:^|/)(" + w + ")(?:Module|Hack|Feature|Mod)?(?:\\$[^/]*)?\\.class$");
+        WEAK_CONST_RE = Pattern.compile("\u0001\u0000(?:" + wc + ")(?!\\w)");
     }
+    private static final String TRUSTED_URL = "https://raw.githubusercontent.com/napatc1/ModAnzer/main/trusted.txt";
 
     // Mods known to be safe even though their code contains a cheat-like name.
     // Matched by exact SHA1 (lowercase) so a renamed cheat can't pretend to be one.
@@ -447,8 +460,17 @@ public class MainActivity extends Activity {
             if (name != null) known.put(left.get(i), name);
         }
 
+        // Extra trusted mods from trusted.txt in the GitHub repo
+        Map<String, String> trusted = new HashMap<>(TRUSTED);
+        try {
+            setStatus("Loading trusted list...");
+            for (String line : http(TRUSTED_URL, null).split("\n")) {
+                Matcher m = Pattern.compile("^\\s*([0-9a-fA-F]{40})\\s+(.+?)\\s*$").matcher(line);
+                if (m.find()) trusted.put(m.group(1).toLowerCase(Locale.ROOT), m.group(2));
+            }
+        } catch (Exception ignored) { }
         for (String h : hashes) {
-            if (TRUSTED.containsKey(h)) known.put(h, TRUSTED.get(h) + " (trusted)");
+            if (trusted.containsKey(h)) known.put(h, trusted.get(h) + " (trusted)");
         }
 
         // 3. scan unknown
@@ -480,6 +502,7 @@ public class MainActivity extends Activity {
         }
 
         int ok = 0, unk = 0, bad = 0;
+        Map<String, List<String>> cheatsByFolder = new LinkedHashMap<>();
         for (Map.Entry<String, List<Jar>> e : byFolder.entrySet()) {
             append(sb, e.getKey() + "  (" + e.getValue().size() + ")\n", C_HEAD, true);
             List<Jar> list = e.getValue();
@@ -501,6 +524,11 @@ public class MainActivity extends Activity {
                         append(sb, hit[1] + "\n", C_HIT, false);
                     }
                     append(sb, "     sha1: " + j.hash + "\n", C_DIM, false);
+                    Set<String> all = new TreeSet<>();
+                    for (String[] hit : h) all.addAll(Arrays.asList(hit[1].split(", ")));
+                    List<String> cl = cheatsByFolder.get(j.folder);
+                    if (cl == null) { cl = new ArrayList<>(); cheatsByFolder.put(j.folder, cl); }
+                    cl.add(j.name + "  " + android.text.TextUtils.join(", ", all));
                 } else {
                     unk++;
                     append(sb, " ??  " + j.name + "\n", C_UNK, false);
@@ -513,6 +541,14 @@ public class MainActivity extends Activity {
         append(sb, "  Verified: " + ok + "\n", C_OK, false);
         append(sb, "  Unknown:  " + unk + "\n", C_UNK, false);
         append(sb, "  Cheat:    " + bad + "\n\n", bad > 0 ? C_BAD : C_DIM, bad > 0);
+        if (!cheatsByFolder.isEmpty()) {
+            append(sb, "Cheats found (" + bad + ")\n", C_BAD, true);
+            for (Map.Entry<String, List<String>> e : cheatsByFolder.entrySet()) {
+                append(sb, "  " + e.getKey() + "\n", C_TEXT, true);
+                for (String c : e.getValue()) append(sb, "   !! " + c + "\n", C_BAD, false);
+            }
+            sb.append("\n");
+        }
         append(sb, "?? means it's not on Modrinth/Megabase, not that it's a cheat. "
                 + "!! is a name match - check it by hand.", C_DIM, false);
         return sb;
@@ -556,6 +592,8 @@ public class MainActivity extends Activity {
         while ((e = zis.getNextEntry()) != null) {
             String name = e.getName();
             addMatches(name, found);
+            Matcher wm = WEAK_NAME_RE.matcher(name);
+            if (wm.find()) found.add(wm.group(1));
             if (e.isDirectory()) continue;
             String lower = name.toLowerCase(Locale.ROOT);
             if (lower.endsWith(".jar") && level < 3) {
@@ -568,7 +606,14 @@ public class MainActivity extends Activity {
                 }
             } else if (lower.endsWith(".class") || lower.endsWith(".json") || lower.endsWith(".toml") || lower.endsWith(".mf")) {
                 byte[] b = readEntry(zis);
-                if (b != null) addMatches(new String(b, StandardCharsets.ISO_8859_1), found);
+                if (b != null) {
+                    String text = new String(b, StandardCharsets.ISO_8859_1);
+                    addMatches(text, found);
+                    if (lower.endsWith(".class")) {
+                        Matcher wc = WEAK_CONST_RE.matcher(text);
+                        while (wc.find()) found.add(wc.group().substring(3));
+                    }
+                }
             }
         }
         if (!found.isEmpty()) {

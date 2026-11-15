@@ -81,13 +81,31 @@ Jars in one level of subfolders (for example `mods\1.21\`) are included too.
 ## What it does
 
 1. Hashes every `.jar` with SHA1.
-2. Looks the hashes up on Modrinth in one batched request, then on Megabase for anything Modrinth doesn't know. Only hashes leave your PC, never files.
-3. Opens each unrecognised jar in memory, including jars nested in `META-INF/jars`, and searches class names and class contents for known cheat module names such as AutoCrystal, TriggerBot and KillAura. The match is case-sensitive, so ordinary words like "velocity" don't trigger it.
-4. Prints the results grouped by launcher and instance: **[OK]** verified, **[?]** unknown (with the download URL Windows recorded, if any), and **[CHEAT]** with the strings that matched.
+2. Looks the hashes up on Modrinth in one batched request, then on Megabase for anything Modrinth doesn't know. With a CurseForge API key (see below), it also checks CurseForge by fingerprint. Only hashes leave your PC, never files.
+3. Opens each unrecognised jar in memory, including jars nested in `META-INF/jars`, and searches it for cheat module names.
+   - **Strong names** such as AutoCrystal, TriggerBot and KillAura count wherever they appear.
+   - **Generic names** (Velocity, Hitboxes, AimAssist, AutoArmor, FastPlace) are also ordinary game-code words, like `getVelocity` in physics mods, so they only count when they are a whole name on their own: a class called `Velocity.class` or `VelocityModule.class`, or the exact text `Velocity` stored as a separate string. That's how cheat module names look.
+4. Prints the results grouped by launcher and instance: **[OK]** verified, **[CF]** installed by the CurseForge app with no cheat names inside, **[?]** unknown (with the download URL Windows recorded, if any), and **[CHEAT]** with the strings that matched and the file's SHA1.
+5. Ends with a summary and a **Cheats found** list showing every cheat and which launcher and instance it was in.
 
 It is read-only: nothing is modified, uploaded, extracted to disk, or installed.
 
-"Unknown" doesn't mean cheat. It only means the mod isn't on Modrinth or Megabase. A cheat hit is a name match, so check it by hand before acting on it.
+"Unknown" doesn't mean cheat. It only means the mod isn't on Modrinth, Megabase or CurseForge. A cheat hit is a name match, so check it by hand before acting on it.
+
+### Trusted mods
+
+Some legit client mods, such as FastClient HUD and Dawn, contain cheat-like names. To mark them OK, add a line to [`trusted.txt`](trusted.txt) in this repo with the SHA1 printed under the `[CHEAT]` result:
+
+```
+1807bd0592525fe40d0d0ee69d30b7486c48fdc7  FastClient HUD 1.21.11
+```
+
+You can edit the file on GitHub, even from a phone, and the script and app pick it up on their next run. Each version of a mod has its own SHA1, so add a line whenever a trusted mod updates. Mods are trusted by exact SHA1 rather than by name, so a cheat renamed to look like a trusted mod is still caught.
+
+### CurseForge
+
+- **[CF] results** come from the CurseForge app's own install record (`minecraftinstance.json`) and work without any setup. They're still scanned for cheat names, so a cheat added to that record still shows as `[CHEAT]`.
+- **Full CurseForge lookups** need a free API key from [console.curseforge.com](https://console.curseforge.com). Put it in `$CurseForgeApiKey` near the top of `ModAnzer.ps1`, or set the `MODANZER_CF_KEY` environment variable. CurseForge's terms say not to share your key, so keep it out of copies you send to other people if you'd rather not expose it.
 
 ## Changes from HabibiModAnalyzer
 
