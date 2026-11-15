@@ -89,6 +89,7 @@ public class MainActivity extends Activity {
     private static final Map<String, String> TRUSTED = new HashMap<>();
     static {
         // TRUSTED.put("sha1-in-lowercase", "Name");
+        TRUSTED.put("1807bd0592525fe40d0d0ee69d30b7486c48fdc7", "FastClient HUD 1.21.11");
     }
 
     private static final Set<String> MOD_DIRS = new HashSet<>(Arrays.asList("mods", "user-mods"));
