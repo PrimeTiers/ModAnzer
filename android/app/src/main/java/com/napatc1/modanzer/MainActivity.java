@@ -94,7 +94,7 @@ public class MainActivity extends Activity {
         WEAK_NAME_RE = Pattern.compile("(?:^|/)(" + w + ")(?:Module|Hack|Feature|Mod)?(?:\\$[^/]*)?\\.class$");
         WEAK_CONST_RE = Pattern.compile("\u0001\u0000(?:" + wc + ")(?!\\w)");
     }
-    private static final String CF_PROXY_URL = "https://flifswwrhevzjwwhqitc.supabase.co/functions/v1/modanzer-cf";
+    private static final String CF_PROXY_URL = "https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/modanzer-cf";
     private static final String TRUSTED_URL = "https://raw.githubusercontent.com/napatc1/ModAnzer/main/trusted.txt";
 
     // Mods known to be safe even though their code contains a cheat-like name.
