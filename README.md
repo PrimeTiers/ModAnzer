@@ -86,6 +86,21 @@ Looks for traces of cheating on the PC (Windows only):
 
 Everything is a lead, not proof. Check each one with the player.
 
+### Sending results to Discord
+
+At the start, ModAnzer asks for a **screenshare code** from PrimeTiers staff. If the player enters one, a summary of the results is sent automatically to the PrimeTiers `#mod-check` channel when the scan ends: an embed with the counts and every cheat and alert, plus the full report as a text file. If they press Enter instead, nothing is sent. You can also pass the code with `-Code <code>`.
+
+- Reports go through ModAnzer's server ([`supabase/functions/modanzer-report`](supabase/functions/modanzer-report/index.ts)). The Discord webhook is stored there, never in the script.
+- The server only accepts reports with a valid code, rate-limits each IP address, and blocks @everyone and other pings.
+- Windows user folders are shown as `~` and user names as `<user>`. Minecraft account **names** are included, never tokens or emails.
+
+Setup, in the **excusemecounter** Supabase project under **Edge Functions → Secrets**:
+
+| Secret | Value |
+|---|---|
+| `MODCHECK_WEBHOOK_URL` | the webhook URL of `#mod-check` (channel settings → Integrations → Webhooks) |
+| `MODCHECK_CODES` | the code(s) staff give players, comma-separated. Change it if it leaks |
+
 ### Antivirus
 
 The Mod Analyzer and System Check only read files, logs and the registry. The **memory scan** is different: to read Minecraft's memory, the script compiles a small built-in helper (it's in the script, look for `ModAnzerNative`) that uses the Windows functions for reading another program's memory. That's what cheats and malware use too, so **Windows Defender may flag or block the script**. The helper is only compiled when the Injection Checker or System Check runs, it only opens Minecraft for reading, and it never writes to, suspends or injects into any process. If the helper gets blocked, ModAnzer skips the memory scan and carries on.
