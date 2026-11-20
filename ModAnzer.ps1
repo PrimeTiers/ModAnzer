@@ -42,6 +42,10 @@
     Injection Checker: stop the live watch after this many seconds
     (default: keep watching until you press Q).
 
+.PARAMETER Code
+    Screenshare code from the server's staff. With a code, the results are sent to
+    the server's mod-check channel when the scan ends.
+
 .PARAMETER NoPause
     Don't wait for Enter at the end (by default it waits, so the window
     stays open when started with right-click > Run with PowerShell).
@@ -58,7 +62,8 @@ param(
     [switch]$SkipIntro,
     [switch]$NoPause,
     [string]$Mode = '',
-    [int]$LiveSeconds = 0
+    [int]$LiveSeconds = 0,
+    [string]$Code = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -120,6 +125,13 @@ $CurseForgeProxyUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/mod
 # Optional: your own CurseForge API key (free at https://console.curseforge.com) to ask
 # CurseForge directly instead. Can also be set with the MODANZER_CF_KEY environment variable.
 $CurseForgeApiKey = ''
+
+# Screenshare reports: with a code from staff, the results are sent to the server's
+# mod-check channel through ModAnzer's server (source: supabase/functions/modanzer-report).
+# The Discord webhook stays on that server; this script never contains it.
+$ReportServerName = 'PrimeTiers'
+$ReportUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/modanzer-report'
+$script:RunReport = [ordered]@{ Mods = $null; System = $null; Injection = $null; Accounts = @() }
 
 # Folder names that hold mods
 $ModFolderNames = @('mods', 'user-mods')
@@ -341,7 +353,9 @@ if (-not $SkipIntro) {
     Write-Host '  so it can read those Windows records - you can say no.' -ForegroundColor Gray
     Write-Host
     Write-Host 'It does NOT:' -ForegroundColor White
-    Write-Host '  - Upload your files, or send anything except the mod fingerprints' -ForegroundColor Gray
+    Write-Host '  - Upload your files. It sends mod fingerprints for the lookups and, ONLY if you' -ForegroundColor Gray
+    Write-Host "    enter a screenshare code from $ReportServerName staff, a summary of the results" -ForegroundColor Gray
+    Write-Host "    to the $ReportServerName mod-check channel (user folders shown as ~)" -ForegroundColor Gray
     Write-Host '  - Read passwords, tokens, emails, browser data or Discord' -ForegroundColor Gray
     Write-Host '  - Change the game''s memory, or inject into or interfere with any program' -ForegroundColor Gray
     Write-Host '  - Change, move or delete any files, or change any settings' -ForegroundColor Gray
@@ -632,6 +646,10 @@ function Start-InjectionChecker {
     Write-Host "`r$(' ' * 100)`r" -NoNewline
     Write-Host
 
+    $script:RunReport.Injection = [ordered]@{
+        Admin = (Test-Admin); Uptime = $up.TrimStart(' -'); GameFolder = $(if ($gameDir) { Get-ShortPath $gameDir } else { '' })
+        Alerts = @($alerts | ForEach-Object { [ordered]@{ Time = $_.Time; Level = $_.Level; Text = $_.Text } })
+    }
     Write-Section 'Injection Checker summary'
     $red = @($alerts | Where-Object { $_.Level -eq 'Red' })
     $yellow = @($alerts | Where-Object { $_.Level -eq 'Yellow' })
@@ -1105,6 +1123,8 @@ function Invoke-SystemCheck {
     }
     Write-Host
 
+    $script:RunReport.System = [ordered]@{ Admin = $admin; Alerts = @($alerts | ForEach-Object { [ordered]@{ Time = $_.Time; Level = $_.Level; Text = $_.Text } }) }
+    $script:RunReport.Accounts = @($names | Sort-Object)
     Write-CheckSummary 'System Check summary' $alerts
     Write-Host
     Write-Host 'These are traces, not proof: check each one with the player before deciding.' -ForegroundColor DarkGray
@@ -1142,6 +1162,18 @@ if (-not $Mode) {
     }
 }
 
+# Screenshare code: with one, the results go to the server's mod-check channel at the end.
+if (-not $Code -and -not $SkipIntro) {
+    Write-Host "Screenshare code from $ReportServerName staff (press Enter to skip - nothing will be sent):" -ForegroundColor White
+    $Code = (Read-Host 'Code').Trim()
+    Write-Host
+}
+if ($Code -and $Code -notmatch '^[A-Za-z0-9_-]{3,64}$') {
+    Write-Host 'That code has characters that are not allowed - results will not be sent.' -ForegroundColor Red
+    $Code = ''
+}
+if ($Code) { Write-Host "Results will be sent to the $ReportServerName mod-check channel when the scan ends." -ForegroundColor Cyan; Write-Host }
+
 # The System Check and the memory scan see more as administrator. Offer to restart elevated.
 if ($Mode -ne 'mods' -and $IsWindowsOS -and -not (Test-Admin)) {
     Write-Host 'Administrator rights let ModAnzer read execution history, Prefetch, the Security log and the game''s memory.' -ForegroundColor White
@@ -1150,6 +1182,7 @@ if ($Mode -ne 'mods' -and $IsWindowsOS -and -not (Test-Admin)) {
         $extra = "-Mode $Mode -SkipIntro"
         if ($Offline) { $extra += ' -Offline' }
         if ($LiveSeconds -gt 0) { $extra += " -LiveSeconds $LiveSeconds" }
+        if ($Code) { $extra += " -Code $Code" }
         if ($PSCommandPath) {
             $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $extra"
         } else {
@@ -1472,6 +1505,7 @@ function Invoke-ModAnalyzer {
 
     $totalCheat = 0; $totalUnknown = 0; $totalVerified = 0; $totalCf = 0
     $cheatList = New-Object 'System.Collections.Generic.List[object]'
+    $unknownList = New-Object 'System.Collections.Generic.List[object]'
 
     # "Launcher > instance" for a mods folder, e.g. "Modrinth > Atzlk_s PMW"
     function Get-InstanceLabel([string]$modsFolder) {
@@ -1519,6 +1553,7 @@ function Invoke-ModAnalyzer {
                 Write-Host $name -ForegroundColor DarkGray
             } else {
                 $totalUnknown++
+                $unknownList.Add([PSCustomObject]@{ Name = $name; Where = (Get-InstanceLabel $f) })
                 Write-Host "  [?]     $name" -ForegroundColor DarkYellow
                 $zone = Get-ZoneIdentifier $j.File.FullName
                 if ($zone) { Write-Host "          downloaded from $zone" -ForegroundColor DarkGray }
@@ -1547,6 +1582,47 @@ function Invoke-ModAnalyzer {
     }
     Write-Host
     Write-Host 'Unknown does not mean cheat - it just is not on Modrinth/Megabase/CurseForge. Cheat hits are name matches; check them by hand.' -ForegroundColor DarkGray
+
+    $script:RunReport.Mods = [ordered]@{
+        Folders  = @($withJars | ForEach-Object { Get-InstanceLabel $_ })
+        Verified = $totalVerified; CurseForgeApp = $totalCf; Unknown = $totalUnknown; Cheat = $totalCheat
+        Cheats   = @($cheatList | ForEach-Object { [ordered]@{ Name = $_.Name; Where = $_.Where; Strings = $_.Strings } })
+        Unknowns = @($unknownList | ForEach-Object { [ordered]@{ Name = $_.Name; Where = $_.Where } })
+    }
+}
+
+# Replace the Windows user folder and user name so reports don't show them.
+function Remove-UserInfo($obj) {
+    $json = $obj | ConvertTo-Json -Depth 8 -Compress
+    foreach ($v in @($env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA)) {
+        if ($v) { $json = $json.Replace(($v | ConvertTo-Json).Trim('"'), $(if ($v -eq $env:USERPROFILE) { '~' } elseif ($v -eq $env:APPDATA) { '%APPDATA%' } else { '%LOCALAPPDATA%' })) }
+    }
+    # any other "\Users\<name>" left in a path (other drives, other accounts)
+    $json = [regex]::Replace($json, '(?i)(\\\\Users\\\\)[^\\"]+', '$1<user>')
+    return $json
+}
+
+function Send-Report {
+    if (-not $Code) { return }
+    $modeName = @{ mods = 'Mod Analyzer'; injection = 'Injection Checker'; system = 'System Check'; full = 'Full Screenshare' }[$Mode]
+    $report = [ordered]@{
+        tool = 'ModAnzer'; mode = $modeName; finished = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz')
+        accounts = @($script:RunReport.Accounts); mods = $script:RunReport.Mods
+        system = $script:RunReport.System; injection = $script:RunReport.Injection
+    }
+    Write-Host
+    Write-Host "[*] Sending the results to the $ReportServerName mod-check channel..." -ForegroundColor Yellow -NoNewline
+    try {
+        $body = '{"code":' + ($Code | ConvertTo-Json) + ',"report":' + (Remove-UserInfo $report) + '}'
+        $bytes = [Text.Encoding]::UTF8.GetBytes($body)
+        $r = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
+        Write-Host "`r[+] Results sent to the $ReportServerName mod-check channel.            " -ForegroundColor Green
+    } catch {
+        $msg = $_.Exception.Message
+        try { if ($_.ErrorDetails.Message) { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error } } catch {}
+        Write-Host "`r[!] Could not send the results: $msg                    " -ForegroundColor Red
+        Write-Host '    Take a screenshot of this window for staff instead.' -ForegroundColor DarkGray
+    }
 }
 
 switch ($Mode) {
@@ -1561,4 +1637,5 @@ switch ($Mode) {
         Start-InjectionChecker
     }
 }
+Send-Report
 Wait-BeforeClose
