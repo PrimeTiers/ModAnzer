@@ -46,28 +46,53 @@ To start it with a double-click, download **[ModAnzer.ico](https://github.com/na
 
 Make the shortcut on each PC rather than sending a `.lnk` file to someone. A shortcut only points to files on the PC it was made on, so the receiver gets a broken shortcut with no icon. Discord and antivirus tools also often block shortcut files that start PowerShell, because malware spreads that way. To share it, send the [release page](https://github.com/napatc1/ModAnzer/releases/tag/apk) link instead.
 
-## Two tools in one
+## What it can do
 
-When it starts, the script asks which tool to use:
+When it starts, the script asks what to do:
 
 ```
   1) Mod Analyzer       - check the mods in your mods folders  [default]
-  2) Injection Checker  - watch the running game for injected cheats
+  2) Injection Checker  - check the running game, its memory, and watch it live
+  3) System Check       - traces: programs that ran, deleted files, cleared logs, USB
+  4) Full Screenshare   - all three, one after another
 ```
+
+For options 2–4 it offers to restart as **administrator**. The player can say no; it then runs the checks a normal user can see and says which ones it skipped.
 
 ### Injection Checker
 
-Run it while the player is in Minecraft (it works on Windows only):
+Run it while the player is in Minecraft (Windows only):
 
-1. **Launch options:** flags anything that adds code to the game at startup, such as `-javaagent`, `-agentpath`, `fabric.addMods`/`loadMods`, the Java debugger, or `-noverify`. Lunar uses its own Java agents, so check where an agent's file lives before calling it a cheat.
-2. **Loaded DLLs:** lists every DLL inside the game and flags the unusual ones: Java agent support (`instrument.dll`) or the debugger (`jdwp.dll`), DLLs loaded from Downloads/Desktop/Temp, and DLLs that aren't signed by any publisher. Signed DLLs from overlays (Discord, OBS, NVIDIA, Steam) show as "worth a look".
-3. **Live watch:** keeps running during the fight and alerts the moment a new DLL is injected into the game, a flagged DLL unloads, a mod is added to or removed from the mods folder, or a program starts from Downloads/Desktop/Temp. Press **Q** to stop and see the summary.
+1. **Launch options:** flags anything that adds code at startup, such as `-javaagent`, `-agentpath`, `fabric.addMods`/`loadMods`, the Java debugger, or `-noverify`. Lunar uses its own Java agents, so check where an agent's file lives before calling it a cheat.
+2. **Loaded DLLs:** flags Java agent support (`instrument.dll`), the debugger (`jdwp.dll`), DLLs loaded from Downloads/Desktop/Temp, and unsigned DLLs. Signed overlays (Discord, OBS, NVIDIA, Steam) show as "worth a look".
+3. **Game memory (read-only):** reads Minecraft's memory and flags cheat module and client names (KillAura, AutoCrystal, Meteor, Wurst, LiquidBounce...), plus **hidden programs**: a complete DLL/EXE sitting in the game's private memory with no file behind it, which is how "manual-mapped" cheats hide from file scans. A cheat name can also be in memory because someone typed it in chat, so check the context.
+4. **Live watch:** alerts the moment a DLL is injected or a flagged one unloads, a mod is added or removed, or a program starts from Downloads/Desktop/Temp. Press **Q** to stop and see the summary.
 
-It only reads the list of loaded DLLs. It never reads or changes the game's memory. Cheats loaded straight into memory without a file, and kernel-level cheats, can hide from it, so treat its alerts as leads. If the game runs as administrator, run the script as administrator too, or it can't see the DLL list.
+### System Check
 
-Use `-Mode injection` to skip the menu, and `-LiveSeconds 300` to stop the watch on its own after 5 minutes.
+Looks for traces of cheating on the PC (Windows only):
 
-When it starts, it first shows what it does and doesn't do, and waits for you to press Enter. Then it asks which launcher you use:
+| Check | What it looks for | Needs admin |
+|---|---|---|
+| PC and running programs | recent restart, virtual machine, cheat tools running now (Cheat Engine, Process Hacker, injectors, macro tools...) | no |
+| Logging services | EventLog, SysMain (Prefetch), PcaSvc, DiagTrack or BAM turned off | no |
+| Programs that ran (BAM) | last 24 h: cheat tools, programs that ran and were then **deleted**, unsigned programs from Downloads/Desktop/Temp | **yes** |
+| Prefetch | cheat tools that ran in the last 24 h, an emptied or freshly cleared Prefetch folder | **yes** |
+| PowerShell history | clearing history or event logs, deleting mods/`.jar`/Prefetch, antivirus exclusions, stopping logging services, downloading `.jar`/`.dll`/`.exe` | no |
+| Event logs | logs cleared in the last 7 days (System 104, Security 1102), file change journal deleted (3079) | Security log only |
+| USB drives | drives plugged in now or in the last 24 h | no |
+| Deleted and downloaded files | `.jar`/`.dll`/`.exe`/`.ahk` in the Recycle Bin, recent mods and tools in Downloads/Desktop | no |
+| Minecraft accounts | account **names** from launcher files and game logs, to spot alts. Never tokens or emails | no |
+
+Everything is a lead, not proof. Check each one with the player.
+
+### Antivirus
+
+The Mod Analyzer and System Check only read files, logs and the registry. The **memory scan** is different: to read Minecraft's memory, the script compiles a small built-in helper (it's in the script, look for `ModAnzerNative`) that uses the Windows functions for reading another program's memory. That's what cheats and malware use too, so **Windows Defender may flag or block the script**. The helper is only compiled when the Injection Checker or System Check runs, it only opens Minecraft for reading, and it never writes to, suspends or injects into any process. If the helper gets blocked, ModAnzer skips the memory scan and carries on.
+
+Use `-Mode mods|injection|system|full` to skip the menu, and `-LiveSeconds 300` to stop the live watch on its own after 5 minutes.
+
+When it starts, it first shows what it does and doesn't do, and waits for you to press Enter. The Mod Analyzer then asks which launcher you use:
 
 ```
   1) Scan everything (auto-detect)  [default]
@@ -94,7 +119,7 @@ Press Enter for 1. If the launcher you pick has no mods folder in its usual plac
 | `-Path "D:\pack\mods"` | Skip the menu and scan only these folders (can list several, comma-separated) |
 | `-Offline` | Skip the online lookups; only do the cheat-string scan |
 | `-SkipIntro` | Don't show the "what this script does" notice at the start |
-| `-Mode mods` / `-Mode injection` | Skip the start menu and go straight to that tool |
+| `-Mode mods` / `injection` / `system` / `full` | Skip the start menu and go straight to that option |
 | `-NoPause` | Don't wait for Enter before closing at the end |
 
 ## Where it looks
@@ -173,7 +198,8 @@ From 30 September 2026, certified Android phones in Brazil, Indonesia, Singapore
 
 ## What antivirus might say
 
-Neither version hides or obfuscates anything. The script is plain text, and the app's full source is in this repo.
+Nothing in ModAnzer is hidden or obfuscated. The script is plain text, and the app's full source is in this repo.
 
-- **Windows:** The script lists folders in `%APPDATA%` and your user folder and reads `.jar` files, so a heuristic scanner could mistake it for a stealer. It never opens launcher account files or tokens, and it sends only SHA1 hashes. If Windows Defender flags it, [report a false positive to Microsoft](https://www.microsoft.com/en-us/wdsi/filesubmission).
-- **Android:** Play Protect may warn about any app that doesn't come from the Play Store. Registering as a developer (above) is what removes that warning.
+- **Windows:** the memory scan is the part most likely to be flagged (see **Antivirus** above). The Mod Analyzer also lists folders in `%APPDATA%` and reads `.jar` files, which a heuristic scanner could mistake for a stealer, but it never opens tokens or passwords and sends only hashes. If Windows Defender flags it, [report a false positive to Microsoft](https://www.microsoft.com/en-us/wdsi/filesubmission).
+- **Android:** Play Protect may warn about any app that doesn't come from the Play Store. Registering as a developer (above) removes that warning.
+

@@ -16,6 +16,13 @@
       * Mods that are not recognised are opened in memory (no temp extraction) and
         searched, including nested jars, for well-known cheat module names.
 
+    Injection Checker: launch options, loaded DLLs, a read-only scan of Minecraft's
+    memory for cheat names and hidden (manual-mapped) programs, then a live watch.
+
+    System Check: BAM and Prefetch execution history, logging services, cleared event
+    logs, PowerShell history, USB drives, Recycle Bin, recent downloads, VM detection
+    and Minecraft account names (names only).
+
     Read-only: nothing is modified, uploaded, or installed.
 
 .PARAMETER Path
@@ -28,8 +35,8 @@
     Don't show the "what this script does" notice or wait for Enter.
 
 .PARAMETER Mode
-    'mods' for the Mod Analyzer or 'injection' for the Injection Checker,
-    skipping the start menu.
+    'mods' (Mod Analyzer), 'injection' (Injection Checker), 'system' (System Check)
+    or 'full' (all three), skipping the start menu.
 
 .PARAMETER LiveSeconds
     Injection Checker: stop the live watch after this many seconds
@@ -313,28 +320,32 @@ function Invoke-Json([string]$uri, [string]$method = 'Get', $body = $null) {
 
 Clear-Host
 Write-Host 'ModAnzer' -ForegroundColor Yellow -NoNewline
-Write-Host '  - Minecraft mod analyzer + injection checker (based on HabibiModAnalyzer by HadronCollision)' -ForegroundColor DarkGray
+Write-Host '  - Minecraft screenshare tool (based on HabibiModAnalyzer by HadronCollision)' -ForegroundColor DarkGray
 Write-Host
 
 if (-not $SkipIntro) {
-    Write-Host 'This is NOT a hacking or malware tool. It is read-only and only:' -ForegroundColor White
+    Write-Host 'This is NOT a hacking or malware tool. It only READS, and only:' -ForegroundColor White
     Write-Host '  Mod Analyzer' -ForegroundColor White
-    Write-Host '  - Finds your Minecraft mods folders (or the one you choose)' -ForegroundColor Gray
-    Write-Host '  - Makes a fingerprint (SHA1 hash) of each .jar mod file' -ForegroundColor Gray
+    Write-Host '  - Finds your Minecraft mods folders and makes a fingerprint (SHA1) of each .jar' -ForegroundColor Gray
     Write-Host '  - Looks those fingerprints up on Modrinth, Megabase and CurseForge to name your mods' -ForegroundColor Gray
     Write-Host '  - Searches mods it does not recognise for known cheat names' -ForegroundColor Gray
     Write-Host '  Injection Checker' -ForegroundColor White
-    Write-Host '  - Reads how the running Minecraft was started (its launch options)' -ForegroundColor Gray
-    Write-Host '  - Lists the DLL files loaded into Minecraft and watches for new ones' -ForegroundColor Gray
-    Write-Host '  - Watches the mods folder and newly started programs while it runs' -ForegroundColor Gray
-    Write-Host '  Both show the results on this screen only.' -ForegroundColor Gray
+    Write-Host '  - Reads how the running Minecraft was started and which DLLs are loaded into it' -ForegroundColor Gray
+    Write-Host '  - Reads Minecraft''s memory (read-only) for cheat names and hidden programs' -ForegroundColor Gray
+    Write-Host '  - Watches the game, its mods folder and newly started programs while it runs' -ForegroundColor Gray
+    Write-Host '  System Check' -ForegroundColor White
+    Write-Host '  - Reads Windows records of programs that ran (BAM, Prefetch), cleared logs,' -ForegroundColor Gray
+    Write-Host '    USB drives, PowerShell history, the Recycle Bin and recent downloads' -ForegroundColor Gray
+    Write-Host '  - Lists Minecraft account NAMES used on this PC (never tokens or emails)' -ForegroundColor Gray
+    Write-Host '  Everything is shown on this screen only. It may ask for administrator rights' -ForegroundColor Gray
+    Write-Host '  so it can read those Windows records - you can say no.' -ForegroundColor Gray
     Write-Host
     Write-Host 'It does NOT:' -ForegroundColor White
     Write-Host '  - Upload your files, or send anything except the mod fingerprints' -ForegroundColor Gray
-    Write-Host '  - Read passwords, tokens, browser data, Discord or launcher accounts' -ForegroundColor Gray
-    Write-Host '  - Read or change the game''s memory, or interfere with any program' -ForegroundColor Gray
-    Write-Host '  - Change, move or delete any files' -ForegroundColor Gray
-    Write-Host '  - Install anything or change any settings' -ForegroundColor Gray
+    Write-Host '  - Read passwords, tokens, emails, browser data or Discord' -ForegroundColor Gray
+    Write-Host '  - Change the game''s memory, or inject into or interfere with any program' -ForegroundColor Gray
+    Write-Host '  - Change, move or delete any files, or change any settings' -ForegroundColor Gray
+    Write-Host '  - Install anything or keep running after you close it' -ForegroundColor Gray
     Write-Host
     Write-Host 'Source code: https://github.com/napatc1/ModAnzer' -ForegroundColor DarkGray
     Write-Host
@@ -521,7 +532,32 @@ function Start-InjectionChecker {
     }
     Write-Host
 
-    # 3. live watch
+    # 3. game memory
+    Write-Section 'Game memory'
+    if (-not $IsWindowsOS) {
+        Write-Host '  Skipped - only works on Windows.' -ForegroundColor DarkGray
+    } elseif (-not (Initialize-Native)) {
+        Write-Host '  Skipped - could not load the memory reader (antivirus may have blocked it).' -ForegroundColor Yellow
+    } else {
+        Write-Host '  Reading Minecraft''s memory (read-only) for cheat names and hidden programs. This can take a minute...' -ForegroundColor DarkGray
+        $scan = [ModAnzerNative]::Scan($p.Pid, [string[]]$MemoryNeedles, 8GB)
+        if ($scan.Error) {
+            Write-Host "  Could not read the game's memory: $($scan.Error). Run ModAnzer as administrator." -ForegroundColor Red
+        } else {
+            Write-Host ('  Scanned {0:N1} GB in {1} regions{2}.' -f ($scan.BytesScanned / 1GB), $scan.Regions, $(if ($scan.Truncated) { ' (stopped at the 8 GB limit)' })) -ForegroundColor DarkGray
+            foreach ($img in $scan.HiddenImages) {
+                Write-Alert 'Red' "Hidden program in Minecraft's memory at $img - a DLL/EXE with no file behind it (how manual-mapped cheats hide)" $alerts
+            }
+            foreach ($k in ($scan.Hits.Keys | Sort-Object)) {
+                Write-Alert 'Red' "Cheat name in Minecraft's memory: $k ($($scan.Hits[$k]) times)" $alerts
+            }
+            if ($scan.HiddenImages.Count -eq 0 -and $scan.Hits.Count -eq 0) { Write-Host '  Nothing found.' -ForegroundColor Green }
+            elseif ($scan.Hits.Count -gt 0) { Write-Host '  Note: a name can also be in memory because it was typed or shown in chat - check the context.' -ForegroundColor DarkGray }
+        }
+    }
+    Write-Host
+
+    # 4. live watch
     Write-Section 'Live watch'
     Write-Host '  Watching for anything injected into the game, mods added or removed, and new programs' -ForegroundColor Gray
     Write-Host '  started from Downloads/Desktop/Temp. Keep this window open during the fight.' -ForegroundColor Gray
@@ -611,14 +647,474 @@ function Start-InjectionChecker {
         }
     }
     Write-Host
-    Write-Host 'This catches common injection (DLLs, Java agents, swapped mods). Cheats loaded straight into memory' -ForegroundColor DarkGray
-    Write-Host 'without a file, or kernel-level cheats, can hide from it. Alerts are leads - check them by hand.' -ForegroundColor DarkGray
+    Write-Host 'This catches injected DLLs, Java agents, swapped mods and many memory-only cheats. Kernel-level cheats,' -ForegroundColor DarkGray
+    Write-Host 'or cheats that wipe their headers and strings, can still hide. Alerts are leads - check them by hand.' -ForegroundColor DarkGray
+}
+
+# ---------------------------------------------------------------- native helper
+# Used only by the System Check (BAM path names) and the Injection Checker's memory
+# scan, and only compiled when one of those runs. It only READS: it opens Minecraft
+# with query + read rights, walks its memory regions and reads them. It never writes
+# to, suspends or injects into any process.
+
+$NativeSource = @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class ModAnzerNative {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MBI {
+        public IntPtr BaseAddress; public IntPtr AllocationBase; public uint AllocationProtect;
+        public ushort PartitionId; public IntPtr RegionSize; public uint State; public uint Protect; public uint Type;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll")] static extern IntPtr VirtualQueryEx(IntPtr h, IntPtr addr, out MBI info, IntPtr len);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool ReadProcessMemory(IntPtr h, IntPtr addr, byte[] buf, IntPtr size, out IntPtr read);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern uint QueryDosDeviceW(string device, StringBuilder target, uint max);
+
+    public static string DosDevice(string drive) {
+        StringBuilder sb = new StringBuilder(1024);
+        return QueryDosDeviceW(drive, sb, 1024) == 0 ? null : sb.ToString();
+    }
+
+    public class ScanResult {
+        public long BytesScanned; public int Regions; public bool Truncated; public string Error;
+        public Dictionary<string, long> Hits = new Dictionary<string, long>();
+        public List<string> HiddenImages = new List<string>();
+    }
+
+    const uint PROCESS_QUERY_INFORMATION = 0x0400, PROCESS_VM_READ = 0x0010;
+    const uint MEM_COMMIT = 0x1000, MEM_PRIVATE = 0x20000, PAGE_NOACCESS = 0x01, PAGE_GUARD = 0x100;
+
+    static void BuildPatterns(string[] needles, out List<byte[]> pats, out List<string> names, out List<int>[] byFirst, out int maxLen) {
+        pats = new List<byte[]>(); names = new List<string>();
+        foreach (string n in needles) {
+            pats.Add(Encoding.ASCII.GetBytes(n)); names.Add(n);
+            pats.Add(Encoding.Unicode.GetBytes(n)); names.Add(n);
+        }
+        byFirst = new List<int>[256];
+        maxLen = 1;
+        for (int i = 0; i < pats.Count; i++) {
+            int f = pats[i][0];
+            if (byFirst[f] == null) byFirst[f] = new List<int>();
+            byFirst[f].Add(i);
+            if (pats[i].Length > maxLen) maxLen = pats[i].Length;
+        }
+    }
+
+    static void CountMatches(byte[] buf, int n, List<byte[]> pats, List<string> names, List<int>[] byFirst, Dictionary<string, long> hits) {
+        for (int i = 0; i < n; i++) {
+            List<int> cand = byFirst[buf[i]];
+            if (cand == null) continue;
+            foreach (int k in cand) {
+                byte[] p = pats[k];
+                if (i + p.Length > n) continue;
+                int j = 1;
+                while (j < p.Length && buf[i + j] == p[j]) j++;
+                if (j == p.Length) { long c; hits.TryGetValue(names[k], out c); hits[names[k]] = c + 1; }
+            }
+        }
+    }
+
+    // "MZ" header that points to a "PE\0\0" signature: the start of a Windows program image.
+    public static bool IsPeHeader(byte[] hdr, int len) {
+        if (len < 0x40 || hdr[0] != 0x4D || hdr[1] != 0x5A) return false;
+        int lfanew = BitConverter.ToInt32(hdr, 0x3C);
+        return lfanew > 0 && lfanew + 4 <= len && hdr[lfanew] == 0x50 && hdr[lfanew + 1] == 0x45 && hdr[lfanew + 2] == 0 && hdr[lfanew + 3] == 0;
+    }
+
+    // Same matching as Scan, on a buffer instead of a process (used for testing).
+    public static Dictionary<string, long> FindInBuffer(byte[] data, string[] needles) {
+        List<byte[]> pats; List<string> names; List<int>[] byFirst; int maxLen;
+        BuildPatterns(needles, out pats, out names, out byFirst, out maxLen);
+        Dictionary<string, long> hits = new Dictionary<string, long>();
+        CountMatches(data, data.Length, pats, names, byFirst, hits);
+        return hits;
+    }
+
+    public static ScanResult Scan(int pid, string[] needles, long maxBytes) {
+        ScanResult res = new ScanResult();
+        IntPtr h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
+        if (h == IntPtr.Zero) { res.Error = "could not open the game for reading (Windows error " + Marshal.GetLastWin32Error() + ")"; return res; }
+        try {
+            List<byte[]> pats; List<string> names; List<int>[] byFirst; int maxLen;
+            BuildPatterns(needles, out pats, out names, out byFirst, out maxLen);
+            const int CHUNK = 4 * 1024 * 1024;
+            byte[] buf = new byte[CHUNK];
+            byte[] hdr = new byte[1024];
+            IntPtr mbiSize = (IntPtr)Marshal.SizeOf(typeof(MBI));
+            long addr = 0;
+            MBI m;
+            while (VirtualQueryEx(h, (IntPtr)addr, out m, mbiSize) != IntPtr.Zero) {
+                long baseA = m.BaseAddress.ToInt64(), size = m.RegionSize.ToInt64();
+                if (size <= 0) break;
+                bool readable = m.State == MEM_COMMIT && m.Protect != 0 && (m.Protect & PAGE_NOACCESS) == 0 && (m.Protect & PAGE_GUARD) == 0;
+                if (readable) {
+                    res.Regions++;
+                    IntPtr got;
+                    // A complete program (DLL/EXE) sitting in private memory with no file behind it.
+                    if (m.Type == MEM_PRIVATE && baseA == m.AllocationBase.ToInt64() &&
+                        ReadProcessMemory(h, (IntPtr)baseA, hdr, (IntPtr)hdr.Length, out got) && IsPeHeader(hdr, (int)got.ToInt64())) {
+                        bool exec = (m.Protect & 0xF0) != 0;
+                        res.HiddenImages.Add(string.Format("0x{0:X} ({1} KB{2})", baseA, size / 1024, exec ? ", executable" : ""));
+                    }
+                    long off = 0;
+                    while (off < size) {
+                        if (res.BytesScanned >= maxBytes) { res.Truncated = true; break; }
+                        int want = (int)Math.Min(CHUNK, size - off);
+                        if (!ReadProcessMemory(h, (IntPtr)(baseA + off), buf, (IntPtr)want, out got) || got.ToInt64() <= 0) { off += want; continue; }
+                        int n = (int)got.ToInt64();
+                        res.BytesScanned += n;
+                        CountMatches(buf, n, pats, names, byFirst, res.Hits);
+                        if (off + want >= size) break;
+                        off += want - (maxLen - 1);
+                    }
+                    if (res.Truncated) break;
+                }
+                long next = baseA + size;
+                if (next <= addr) break;
+                addr = next;
+            }
+        } finally { CloseHandle(h); }
+        return res;
+    }
+}
+'@
+
+$IsWindowsOS = ($env:OS -eq 'Windows_NT')
+
+function Initialize-Native {
+    if (-not $IsWindowsOS) { return $false }
+    if ('ModAnzerNative' -as [type]) { return $true }
+    try { Add-Type -TypeDefinition $NativeSource -Language CSharp -ErrorAction Stop; return $true } catch { return $false }
+}
+
+function Test-Admin {
+    if (-not $IsWindowsOS) { return $false }
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        return ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+
+# Names in Minecraft memory or process lists that point to cheats.
+$MemoryNeedles = @($CheatStrings) + @('meteordevelopment', 'wurstclient', 'net/ccbluex', 'aristois', 'rusherhack', 'thunderhack', 'impactclient', 'doomsdayclient')
+
+# Program names that point to cheating tools (red) or are worth a look (yellow).
+$ToolRedRe    = 'cheat\s?engine|process\s?hacker|system\s?informer|x64dbg|x32dbg|ollydbg|dnspy|recaf|jd-gui|bytecode\s?viewer|extreme\s?injector|xenos|injector|dll\s?inject|kdmapper|manual\s?map|vape[ .\-_]?(lite|v4|client)?\.exe|doomsday'
+$ToolYellowRe = 'autohotkey|\.ahk$|tinytask|macro|procexp|process\s?explorer|ghidra|ida64|ida\.exe|wireshark|fiddler|cheat'
+
+function Get-ToolLevel([string]$name) {
+    if (-not $name) { return $null }
+    $n = $name.ToLowerInvariant()
+    if ($n -match $ToolRedRe) { return 'Red' }
+    if ($n -match $ToolYellowRe) { return 'Yellow' }
+    return $null
+}
+
+# ---------------------------------------------------------------- system check
+
+function Write-CheckSummary([string]$title, $alerts) {
+    Write-Section $title
+    $red = @($alerts | Where-Object { $_.Level -eq 'Red' })
+    $yellow = @($alerts | Where-Object { $_.Level -eq 'Yellow' })
+    if ($red.Count -eq 0 -and $yellow.Count -eq 0) {
+        Write-Host '  Nothing suspicious found.' -ForegroundColor Green
+        return
+    }
+    Write-Host "  Suspicious: $($red.Count)" -ForegroundColor $(if ($red.Count) { 'Red' } else { 'Gray' })
+    Write-Host "  Worth a look: $($yellow.Count)" -ForegroundColor $(if ($yellow.Count) { 'Yellow' } else { 'Gray' })
+    Write-Host
+    foreach ($a in @($red) + @($yellow)) {
+        Write-Host "  [$($a.Time)] " -ForegroundColor DarkGray -NoNewline
+        Write-Host $a.Text -ForegroundColor $(if ($a.Level -eq 'Red') { 'Red' } else { 'Yellow' })
+    }
+}
+
+function Get-ProfileNames($obj, $into) {
+    if ($null -eq $obj) { return }
+    if ($obj -is [System.Collections.IEnumerable] -and $obj -isnot [string]) { foreach ($x in $obj) { Get-ProfileNames $x $into }; return }
+    if ($obj -isnot [PSCustomObject]) { return }
+    foreach ($prop in $obj.PSObject.Properties) {
+        if ($prop.Name -in @('minecraftProfile', 'profile') -and $prop.Value -is [PSCustomObject] -and $prop.Value.name -is [string]) {
+            [void]$into.Add($prop.Value.name)
+        } elseif ($prop.Value -is [PSCustomObject] -or ($prop.Value -is [System.Collections.IEnumerable] -and $prop.Value -isnot [string])) {
+            Get-ProfileNames $prop.Value $into
+        }
+    }
+}
+
+function Invoke-SystemCheck {
+    Write-Section 'System Check'
+    if (-not $IsWindowsOS) { Write-Host '  The System Check only works on Windows.' -ForegroundColor Red; return }
+    $admin = Test-Admin
+    if (-not $admin) { Write-Host '  Not running as administrator: execution history, prefetch and some logs will be skipped.' -ForegroundColor Yellow }
+    $alerts = New-Object 'System.Collections.Generic.List[object]'
+    $now = Get-Date
+    $day = $now.AddHours(-24)
+    $week = $now.AddDays(-7)
+    $drop = Get-UserDropFolders
+    Write-Host
+
+    # 1. restart + running tools
+    Write-Section 'PC and running programs'
+    try {
+        $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+        $up = $now - $boot
+        Write-Host ('  PC started {0} ({1}h {2}m ago)' -f $boot.ToString('yyyy-MM-dd HH:mm'), [int][math]::Floor($up.TotalHours), $up.Minutes) -ForegroundColor Gray
+        if ($up.TotalMinutes -lt 20) { Write-Alert 'Yellow' "PC was restarted $([int]$up.TotalMinutes) minutes ago - a restart clears some traces" $alerts }
+    } catch {}
+    try {
+        $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        $hw = "$($cs.Manufacturer) $($cs.Model)"
+        if ($hw -match 'VMware|VirtualBox|QEMU|KVM|Xen|Parallels|Virtual Machine|Hyper-V|innotek') { Write-Alert 'Yellow' "Running inside a virtual machine ($hw)" $alerts }
+    } catch {}
+    foreach ($pr in (Get-Process -ErrorAction SilentlyContinue)) {
+        $lvl = Get-ToolLevel "$($pr.ProcessName).exe"
+        if (-not $lvl -and (Get-ToolLevel $pr.MainWindowTitle) -eq 'Red') { $lvl = 'Red' }
+        if ($lvl) { Write-Alert $lvl "Running now: $($pr.ProcessName) (PID $($pr.Id))$(if ($pr.MainWindowTitle) { " - '$($pr.MainWindowTitle)'" })" $alerts }
+    }
+    Write-Host
+
+    # 2. services that record what ran
+    Write-Section 'Logging services'
+    $svcRules = @(
+        @{ Name = 'EventLog'; Level = 'Red';    Why = 'records Windows event logs' },
+        @{ Name = 'SysMain';  Level = 'Yellow'; Why = 'keeps the Prefetch record of programs that ran (some people turn it off for speed)' },
+        @{ Name = 'PcaSvc';   Level = 'Yellow'; Why = 'Program Compatibility Assistant, records programs that ran' },
+        @{ Name = 'DiagTrack';Level = 'Yellow'; Why = 'diagnostics service (often turned off by privacy tweaks)' }
+    )
+    $okSvc = 0
+    foreach ($r in $svcRules) {
+        $svc = Get-Service -Name $r.Name -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -ne 'Running') { Write-Alert $r.Level "$($r.Name) is $($svc.Status) - it $($r.Why)" $alerts } else { $okSvc++ }
+    }
+    try {
+        $bamDrv = Get-CimInstance Win32_SystemDriver -Filter "Name='bam'" -ErrorAction Stop
+        if ($bamDrv -and $bamDrv.State -ne 'Running') { Write-Alert 'Red' "BAM is $($bamDrv.State) - it records which programs ran" $alerts }
+    } catch {}
+    if ($okSvc -eq $svcRules.Count) { Write-Host '  All running.' -ForegroundColor Green }
+    Write-Host
+
+    # 3. BAM: programs that ran (needs admin)
+    Write-Section 'Programs that ran in the last 24 hours (BAM)'
+    if (-not $admin) {
+        Write-Host '  Skipped - needs administrator.' -ForegroundColor DarkGray
+    } elseif (-not (Initialize-Native)) {
+        Write-Host '  Skipped - could not load the helper.' -ForegroundColor DarkGray
+    } else {
+        $devMap = @{}
+        foreach ($d in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+            $dev = [ModAnzerNative]::DosDevice("$($d.Name):")
+            if ($dev) { $devMap[$dev] = "$($d.Name):" }
+        }
+        $entries = @()
+        foreach ($root in @('HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings', 'HKLM:\SYSTEM\CurrentControlSet\Services\bam\UserSettings')) {
+            if (-not (Test-Path $root)) { continue }
+            foreach ($k in (Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+                foreach ($n in $k.GetValueNames()) {
+                    $v = $k.GetValue($n)
+                    if ($v -isnot [byte[]] -or $v.Length -lt 8) { continue }
+                    try { $t = [DateTime]::FromFileTime([BitConverter]::ToInt64($v, 0)) } catch { continue }
+                    if ($t -lt $day) { continue }
+                    $path = $n
+                    foreach ($dev in $devMap.Keys) { if ($path.StartsWith("$dev\", [StringComparison]::OrdinalIgnoreCase)) { $path = $devMap[$dev] + $path.Substring($dev.Length); break } }
+                    $entries += [PSCustomObject]@{ Path = $path; Time = $t }
+                }
+            }
+        }
+        $flagged = 0
+        foreach ($e in ($entries | Sort-Object Time -Descending)) {
+            $file = [IO.Path]::GetFileName($e.Path)
+            $when = $e.Time.ToString('HH:mm')
+            $exists = $false
+            if ($e.Path -match '^[A-Za-z]:\\') { $exists = Test-Path -LiteralPath $e.Path }
+            $lvl = Get-ToolLevel $file
+            $inDrop = Test-UnderPath $e.Path $drop
+            if ($lvl) { $flagged++; Write-Alert $lvl "Ran at ${when}: $(Get-ShortPath $e.Path)$(if (-not $exists) { ' (file is gone now)' })" $alerts }
+            elseif (-not $exists -and $e.Path -match '\\Users\\') { $flagged++; Write-Alert 'Red' "Ran at $when and was DELETED afterwards: $(Get-ShortPath $e.Path)" $alerts }
+            elseif ($inDrop -and $exists -and -not (Get-Signer $e.Path)) { $flagged++; Write-Alert 'Yellow' "Unsigned program from a user folder ran at ${when}: $(Get-ShortPath $e.Path)" $alerts }
+        }
+        Write-Host "  $($entries.Count) programs ran, $flagged flagged." -ForegroundColor $(if ($flagged) { 'Gray' } else { 'Green' })
+    }
+    Write-Host
+
+    # 4. Prefetch (needs admin)
+    Write-Section 'Prefetch'
+    $pfDir = Join-Path $env:SystemRoot 'Prefetch'
+    if (-not $admin) {
+        Write-Host '  Skipped - needs administrator.' -ForegroundColor DarkGray
+    } else {
+        $pf = @(Get-ChildItem -LiteralPath $pfDir -Filter *.pf -File -ErrorAction SilentlyContinue)
+        $sysMain = Get-Service SysMain -ErrorAction SilentlyContinue
+        if ($pf.Count -eq 0) {
+            if ($sysMain -and $sysMain.Status -eq 'Running') { Write-Alert 'Red' 'Prefetch folder is empty although Prefetch is on - it was probably cleared' $alerts }
+            else { Write-Host '  Empty (Prefetch is turned off).' -ForegroundColor DarkGray }
+        } else {
+            $oldest = ($pf | Sort-Object CreationTime | Select-Object -First 1).CreationTime
+            if ($pf.Count -lt 40 -and $oldest -gt $day) { Write-Alert 'Yellow' "Only $($pf.Count) Prefetch files, all created in the last 24 hours - it may have been cleared" $alerts }
+            $recentPf = @($pf | Where-Object { $_.LastWriteTime -ge $day })
+            $hit = 0
+            foreach ($f in $recentPf) {
+                $exe = $f.BaseName -replace '-[0-9A-F]{8}$', ''
+                $lvl = Get-ToolLevel $exe
+                if ($lvl) { $hit++; Write-Alert $lvl "Prefetch: $exe ran at $($f.LastWriteTime.ToString('HH:mm'))" $alerts }
+            }
+            Write-Host "  $($recentPf.Count) programs ran in the last 24 hours, $hit flagged." -ForegroundColor $(if ($hit) { 'Gray' } else { 'Green' })
+        }
+    }
+    Write-Host
+
+    # 5. PowerShell history
+    Write-Section 'PowerShell history'
+    $histPath = Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
+    if (-not (Test-Path -LiteralPath $histPath)) {
+        Write-Host '  No PowerShell history file.' -ForegroundColor DarkGray
+    } else {
+        $rules = @(
+            @{ Re = 'Clear-History|ConsoleHost_history|HistorySaveStyle'; Level = 'Red'; Why = 'cleared or turned off PowerShell history' },
+            @{ Re = 'wevtutil(\.exe)?\s+(cl|clear-log)|Clear-EventLog|Remove-EventLog|Limit-EventLog'; Level = 'Red'; Why = 'cleared event logs' },
+            @{ Re = 'fsutil(\.exe)?\s+usn\s+deletejournal'; Level = 'Red'; Why = 'deleted the file change journal' },
+            @{ Re = '(Remove-Item|\bdel\b|\berase\b|\brm\b|\brmdir\b|\brd\b|\bri\b).*(\.jar|[\\/]mods\b|\.minecraft|prefetch|\.pf\b|\.dll\b)'; Level = 'Red'; Why = 'deleted mods or evidence' },
+            @{ Re = '(Set|Add)-MpPreference.*Exclusion'; Level = 'Red'; Why = 'added an antivirus exclusion' },
+            @{ Re = '(Stop|Set)-Service.*(SysMain|EventLog|PcaSvc|DiagTrack|bam)|sc(\.exe)?\s+(stop|config)\s+(SysMain|EventLog|PcaSvc|DiagTrack|bam)'; Level = 'Red'; Why = 'stopped a logging service' },
+            @{ Re = 'reg(\.exe)?\s+delete.*(bam|UserAssist|ShellBag|Prefetch)|Remove-Item.*HKLM:.*bam'; Level = 'Red'; Why = 'deleted execution history from the registry' },
+            @{ Re = '(Invoke-WebRequest|\biwr\b|\bcurl\b|\bwget\b|Start-BitsTransfer|DownloadFile|Invoke-RestMethod|\birm\b).*\.(jar|dll|exe)\b'; Level = 'Yellow'; Why = 'downloaded a program or mod from the command line' }
+        )
+        $lines = @(Get-Content -LiteralPath $histPath -ErrorAction SilentlyContinue)
+        $hit = 0
+        foreach ($line in $lines) {
+            if ($line -match 'ModAnzer') { continue }
+            foreach ($r in $rules) {
+                if ($line -match $r.Re) {
+                    $hit++
+                    $shown = $line.Trim(); if ($shown.Length -gt 110) { $shown = $shown.Substring(0, 110) + '...' }
+                    Write-Alert $r.Level "$($r.Why): $shown" $alerts
+                    break
+                }
+            }
+        }
+        $age = $now - (Get-Item -LiteralPath $histPath).LastWriteTime
+        Write-Host "  $($lines.Count) commands, $hit flagged (last change $([int]$age.TotalHours)h ago)." -ForegroundColor $(if ($hit) { 'Gray' } else { 'Green' })
+    }
+    Write-Host
+
+    # 6. event logs
+    Write-Section 'Event logs'
+    $ev = 0
+    $queries = @(
+        @{ Log = 'System'; Id = 104; Level = 'Red'; Why = 'an event log was cleared'; Admin = $false },
+        @{ Log = 'Security'; Id = 1102; Level = 'Red'; Why = 'the Security log was cleared'; Admin = $true },
+        @{ Log = 'Application'; Id = 3079; Level = 'Red'; Why = 'the file change journal was deleted'; Admin = $false }
+    )
+    foreach ($q in $queries) {
+        if ($q.Admin -and -not $admin) { continue }
+        try {
+            foreach ($e in @(Get-WinEvent -FilterHashtable @{ LogName = $q.Log; Id = $q.Id; StartTime = $week } -MaxEvents 5 -ErrorAction Stop)) {
+                $ev++
+                Write-Alert $q.Level "$($e.TimeCreated.ToString('yyyy-MM-dd HH:mm')): $($q.Why) ($($q.Log) event $($q.Id))" $alerts
+            }
+        } catch {}
+    }
+    if ($ev -eq 0) { Write-Host "  No log clearing in the last 7 days$(if (-not $admin) { ' (Security log skipped - needs administrator)' })." -ForegroundColor Green }
+    Write-Host
+
+    # 7. USB drives
+    Write-Section 'USB drives'
+    $usb = 0
+    foreach ($d in @(Get-PnpDevice -InstanceId 'USBSTOR\*' -ErrorAction SilentlyContinue)) {
+        $last = $null
+        try { $last = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_LastArrivalDate' -ErrorAction Stop).Data } catch {}
+        if ($d.Status -eq 'OK') { $usb++; Write-Alert 'Yellow' "USB drive plugged in now: $($d.FriendlyName)" $alerts }
+        elseif ($last -and $last -ge $day) { $usb++; Write-Alert 'Yellow' "USB drive was plugged in at $($last.ToString('HH:mm')): $($d.FriendlyName)" $alerts }
+    }
+    if ($usb -eq 0) { Write-Host '  No USB drives in the last 24 hours.' -ForegroundColor Green }
+    Write-Host
+
+    # 8. Recycle Bin + recent downloads
+    Write-Section 'Deleted and downloaded files'
+    $files = 0
+    try {
+        $rb = (New-Object -ComObject Shell.Application).NameSpace(10)
+        foreach ($it in @($rb.Items())) {
+            $ext = [IO.Path]::GetExtension([string]$it.Path).ToLowerInvariant()
+            if ($ext -notin @('.jar', '.dll', '.exe', '.ahk', '.pf')) { continue }
+            $when = $null
+            try { $when = [DateTime]$it.ExtendedProperty('System.Recycle.DateDeleted') } catch {}
+            if ($when -and $when -lt $week) { continue }
+            $from = ''
+            try { $from = [string]$it.ExtendedProperty('System.Recycle.DeletedFrom') } catch {}
+            $files++
+            $lvl = if ($ext -in @('.jar', '.dll', '.pf') -or (Get-ToolLevel $it.Name) -eq 'Red') { 'Red' } else { 'Yellow' }
+            Write-Alert $lvl "In the Recycle Bin: $($it.Name)$(if ($from) { " (from $(Get-ShortPath $from))" })$(if ($when) { ", deleted $($when.ToString('yyyy-MM-dd HH:mm'))" })" $alerts
+        }
+    } catch {}
+    foreach ($dir in @("$env:USERPROFILE\Downloads", "$env:USERPROFILE\Desktop")) {
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Recurse -Depth 1 -Include *.jar, *.dll, *.exe, *.ahk -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $week })) {
+            $lvl = Get-ToolLevel $f.Name
+            if (-not $lvl -and $f.Extension -in @('.jar', '.ahk')) { $lvl = 'Yellow' }
+            if ($lvl) { $files++; Write-Alert $lvl "Recent file: $(Get-ShortPath $f.FullName) ($($f.LastWriteTime.ToString('yyyy-MM-dd HH:mm')))" $alerts }
+        }
+    }
+    if ($files -eq 0) { Write-Host '  Nothing suspicious in the Recycle Bin, Downloads or Desktop.' -ForegroundColor Green }
+    Write-Host
+
+    # 9. Minecraft accounts (names only)
+    Write-Section 'Minecraft accounts used on this PC (names only)'
+    $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $acctFiles = @(
+        "$env:APPDATA\.minecraft\launcher_accounts.json",
+        "$env:APPDATA\.minecraft\launcher_accounts_microsoft_store.json",
+        "$env:APPDATA\PrismLauncher\accounts.json",
+        "$env:APPDATA\PolyMC\accounts.json",
+        "$env:USERPROFILE\.lunarclient\settings\game\accounts.json"
+    )
+    foreach ($af in $acctFiles) {
+        if (-not (Test-Path -LiteralPath $af)) { continue }
+        try { Get-ProfileNames (Get-Content -Raw -LiteralPath $af | ConvertFrom-Json) $names } catch {}
+    }
+    $logGlobs = @(
+        "$env:APPDATA\.minecraft\logs\latest.log",
+        "$env:APPDATA\ModrinthApp\profiles\*\logs\latest.log",
+        "$env:APPDATA\PrismLauncher\instances\*\.minecraft\logs\latest.log",
+        "$env:USERPROFILE\curseforge\minecraft\Instances\*\logs\latest.log",
+        "$env:APPDATA\.dawn\*\logs\latest.log",
+        "$env:USERPROFILE\.lunarclient\logs\game\*.log"
+    )
+    foreach ($g in $logGlobs) {
+        foreach ($lf in @(Get-ChildItem -Path $g -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 10)) {
+            try {
+                $fs = [IO.File]::Open($lf.FullName, 'Open', 'Read', 'ReadWrite')
+                try {
+                    $len = [math]::Min($fs.Length, 2MB)
+                    $buf = New-Object byte[] $len
+                    [void]$fs.Read($buf, 0, $len)
+                    foreach ($m in [regex]::Matches([Text.Encoding]::UTF8.GetString($buf), 'Setting user:\s*([A-Za-z0-9_]{3,16})')) { [void]$names.Add($m.Groups[1].Value) }
+                } finally { $fs.Dispose() }
+            } catch {}
+        }
+    }
+    if ($names.Count -eq 0) { Write-Host '  None found.' -ForegroundColor DarkGray }
+    else {
+        Write-Host "  $(@($names | Sort-Object) -join ', ')" -ForegroundColor Gray
+        if ($names.Count -gt 1) { Write-Alert 'Yellow' "$($names.Count) different Minecraft accounts used on this PC: $(@($names | Sort-Object) -join ', ')" $alerts }
+    }
+    Write-Host
+
+    Write-CheckSummary 'System Check summary' $alerts
+    Write-Host
+    Write-Host 'These are traces, not proof: check each one with the player before deciding.' -ForegroundColor DarkGray
+    Write-Host
 }
 
 # ---------------------------------------------------------------- start menu
 
-if ($Mode -and $Mode -notin @('mods', 'injection')) {
-    Write-Host "Unknown -Mode '$Mode'. Use -Mode mods or -Mode injection." -ForegroundColor Red
+if ($Mode -and $Mode -notin @('mods', 'injection', 'system', 'full')) {
+    Write-Host "Unknown -Mode '$Mode'. Use mods, injection, system or full." -ForegroundColor Red
     $Mode = ''
 }
 
@@ -627,402 +1123,442 @@ if (-not $Mode) {
     else {
         Write-Host 'What do you want to do?' -ForegroundColor White
         Write-Host '  1) ' -ForegroundColor Yellow -NoNewline; Write-Host 'Mod Analyzer       ' -NoNewline; Write-Host '- check the mods in your mods folders  [default]' -ForegroundColor DarkGray
-        Write-Host '  2) ' -ForegroundColor Yellow -NoNewline; Write-Host 'Injection Checker  ' -NoNewline; Write-Host '- watch the running game for injected cheats' -ForegroundColor DarkGray
+        Write-Host '  2) ' -ForegroundColor Yellow -NoNewline; Write-Host 'Injection Checker  ' -NoNewline; Write-Host '- check the running game, its memory, and watch it live' -ForegroundColor DarkGray
+        Write-Host '  3) ' -ForegroundColor Yellow -NoNewline; Write-Host 'System Check       ' -NoNewline; Write-Host '- traces: programs that ran, deleted files, cleared logs, USB' -ForegroundColor DarkGray
+        Write-Host '  4) ' -ForegroundColor Yellow -NoNewline; Write-Host 'Full Screenshare   ' -NoNewline; Write-Host '- all three, one after another' -ForegroundColor DarkGray
         Write-Host
         while (-not $Mode) {
-            $in = (Read-Host 'Choose 1-2').Trim()
-            if ($in -eq '' -or $in -eq '1') { $Mode = 'mods' }
-            elseif ($in -eq '2') { $Mode = 'injection' }
-            else { Write-Host 'Type 1 or 2.' -ForegroundColor Red }
+            $in = (Read-Host 'Choose 1-4').Trim()
+            switch ($in) {
+                ''  { $Mode = 'mods' }
+                '1' { $Mode = 'mods' }
+                '2' { $Mode = 'injection' }
+                '3' { $Mode = 'system' }
+                '4' { $Mode = 'full' }
+                default { Write-Host 'Type a number from 1 to 4.' -ForegroundColor Red }
+            }
         }
         Write-Host
     }
 }
 
-if ($Mode -eq 'injection') {
-    Start-InjectionChecker
-    Wait-BeforeClose
-    exit 0
-}
-
-$running = @(Get-RunningGameDirs)
-if ($running.Count -gt 0) {
-    Write-Section 'Running Minecraft'
-    foreach ($r in $running) {
-        $up = ''
-        if ($r.Started) {
-            $t = (Get-Date) - $r.Started
-            $up = ' - up {0}h {1}m {2}s' -f [int][math]::Floor($t.TotalHours), $t.Minutes, $t.Seconds
+# The System Check and the memory scan see more as administrator. Offer to restart elevated.
+if ($Mode -ne 'mods' -and $IsWindowsOS -and -not (Test-Admin)) {
+    Write-Host 'Administrator rights let ModAnzer read execution history, Prefetch, the Security log and the game''s memory.' -ForegroundColor White
+    $ans = (Read-Host 'Restart as administrator for a full check? [Y/n]').Trim()
+    if ($ans -eq '' -or $ans -match '^[yY]') {
+        $extra = "-Mode $Mode -SkipIntro"
+        if ($Offline) { $extra += ' -Offline' }
+        if ($LiveSeconds -gt 0) { $extra += " -LiveSeconds $LiveSeconds" }
+        if ($PSCommandPath) {
+            $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $extra"
+        } else {
+            $argLine = "-NoProfile -ExecutionPolicy Bypass -Command `"& ([scriptblock]::Create((Invoke-RestMethod 'https://modanzer.onrender.com/ModAnzer.txt'))) $extra`""
         }
-        Write-Host "> PID $($r.Pid)$up" -ForegroundColor White
-        Write-Host "  $(Get-ShortPath $r.Dir)" -ForegroundColor Gray
-    }
-    Write-Host
-}
-
-$folders = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-
-function Fix-Sep([string]$p) { return $p.Replace('\', [IO.Path]::DirectorySeparatorChar) }
-
-$home_ = $env:USERPROFILE
-$Launchers = @(
-    @{ Name = 'Minecraft Launcher (.minecraft, Badlion, SKLauncher)'; Roots = @("$env:APPDATA\.minecraft") },
-    @{ Name = 'CurseForge';            Roots = @("$home_\curseforge\minecraft\Instances", "$home_\Documents\curseforge\minecraft\Instances", "$home_\Twitch\Minecraft\Instances") },
-    @{ Name = 'Modrinth App';          Roots = @("$env:APPDATA\ModrinthApp", "$env:APPDATA\com.modrinth.theseus") },
-    @{ Name = 'Prism / MultiMC / PolyMC'; Roots = @("$env:APPDATA\PrismLauncher", "$env:APPDATA\PolyMC", "$env:LOCALAPPDATA\Programs\PrismLauncher", "$env:LOCALAPPDATA\Programs\MultiMC") },
-    @{ Name = 'ATLauncher';            Roots = @("$env:APPDATA\ATLauncher") },
-    @{ Name = 'GDLauncher';            Roots = @("$env:APPDATA\gdlauncher_next", "$env:APPDATA\gdlauncher_carbon") },
-    @{ Name = 'Lunar Client';          Roots = @("$home_\.lunarclient") },
-    @{ Name = 'Dawn Client (formerly Feather)'; Roots = @("$env:APPDATA\.dawn", "$home_\.dawn", "$env:APPDATA\.feather") },
-    @{ Name = 'Fast Client';           Roots = @("$env:APPDATA\.fastclient", "$home_\.fastclient", "$env:APPDATA\FastClient", "$env:LOCALAPPDATA\FastClient", "$env:LOCALAPPDATA\Programs\FastClient") },
-    @{ Name = 'TLauncher';             Roots = @("$env:APPDATA\.tlauncher", "$env:APPDATA\.minecraft") },
-    @{ Name = 'Technic';               Roots = @("$env:APPDATA\.technic") }
-)
-
-# Add the mods folders found under each root
-function Add-FromRoots($rootList) {
-    foreach ($root in $rootList) {
-        if (-not $root) { continue }
-        $root = Fix-Sep $root
-        if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
-        $leaf = [IO.Path]::GetFileName($root.TrimEnd('\', '/'))
-        if ($ModFolderNames -contains $leaf.ToLowerInvariant()) { [void]$folders.Add($root); continue }
-        foreach ($f in (Find-ModFolders $root)) { [void]$folders.Add($f) }
-    }
-}
-
-# A folder the user typed: use it if it holds jars, otherwise look for mods folders inside it
-function Add-UserFolder([string]$p) {
-    $p = $p.Trim().Trim('"').Trim("'")
-    if ($p -and -not (Test-Path -LiteralPath $p -PathType Container) -and (Test-Path -LiteralPath (Fix-Sep $p) -PathType Container)) { $p = Fix-Sep $p }
-    if (-not $p -or -not (Test-Path -LiteralPath $p -PathType Container)) { return $false }
-    $p = (Resolve-Path -LiteralPath $p).ProviderPath
-    $before = $folders.Count
-    if (Get-ChildItem -LiteralPath $p -Filter *.jar -File -Recurse -Depth 1 -ErrorAction SilentlyContinue | Select-Object -First 1) {
-        [void]$folders.Add($p)
-    }
-    foreach ($f in (Find-ModFolders $p)) { [void]$folders.Add($f) }
-    if ($folders.Count -eq $before) { [void]$folders.Add($p) }
-    return $true
-}
-
-if ($Path) {
-    foreach ($p in $Path) {
-        if (-not (Add-UserFolder $p)) { Write-Host "Not a folder: $p" -ForegroundColor Red }
-    }
-} else {
-    $otherNum = $Launchers.Count + 2
-    Write-Host 'Which launcher do you use?' -ForegroundColor White
-    Write-Host '  1) ' -ForegroundColor Yellow -NoNewline; Write-Host 'Scan everything (auto-detect)  ' -NoNewline; Write-Host '[default]' -ForegroundColor DarkGray
-    for ($n = 0; $n -lt $Launchers.Count; $n++) {
-        Write-Host ('{0,3}) ' -f ($n + 2)) -ForegroundColor Yellow -NoNewline; Write-Host $Launchers[$n].Name
-    }
-    Write-Host ('{0,3}) ' -f $otherNum) -ForegroundColor Yellow -NoNewline; Write-Host 'Other (type the path to your mods folder)'
-    Write-Host
-
-    $choice = $null
-    while ($null -eq $choice) {
-        $in = (Read-Host "Choose 1-$otherNum").Trim()
-        if ($in -eq '') { $in = '1' }
-        $num = 0
-        if ([int]::TryParse($in, [ref]$num) -and $num -ge 1 -and $num -le $otherNum) { $choice = $num }
-        else { Write-Host "Type a number from 1 to $otherNum." -ForegroundColor Red }
-    }
-    Write-Host
-
-    if ($choice -eq $otherNum) {
-        while ($true) {
-            $typed = Read-Host 'Path to the mods folder'
-            if (Add-UserFolder $typed) { break }
-            Write-Host 'That folder does not exist. Try again (you can paste it from File Explorer).' -ForegroundColor Red
-        }
-    } elseif ($choice -ge 2) {
-        $pick = $Launchers[$choice - 2]
-        Write-Host "[*] Looking for $($pick.Name) mods folders..." -ForegroundColor Yellow -NoNewline
-        Add-FromRoots $pick.Roots
-        if ($folders.Count -eq 0) {
-            Write-Host "`r$(' ' * 70)`r" -NoNewline
-            Write-Host "No $($pick.Name) mods folder found in the usual place." -ForegroundColor Red
-            while ($true) {
-                $typed = Read-Host 'Paste the path to your mods folder (or press Enter to scan everything)'
-                if (-not $typed.Trim()) { $choice = 1; break }
-                if (Add-UserFolder $typed) { break }
-                Write-Host 'That folder does not exist. Try again.' -ForegroundColor Red
-            }
-        }
-    }
-
-    if ($choice -eq 1) {
-        Write-Host '[*] Looking for mods folders...' -ForegroundColor Yellow -NoNewline
-        $all = @()
-        foreach ($l in $Launchers) { $all += $l.Roots }
-
-        # Microsoft Store launcher
-        Get-ChildItem -Path (Fix-Sep "$env:LOCALAPPDATA\Packages") -Directory -Filter 'Microsoft.4297127D64EC6_*' -ErrorAction SilentlyContinue |
-            ForEach-Object { $all += (Join-Path $_.FullName 'LocalCache\Roaming\.minecraft') }
-
-        # Any dot-folder in AppData\Roaming or the user folder (.dawn, .badlion, other clients)
-        foreach ($base in @($env:APPDATA, $home_)) {
-            if (-not $base) { continue }
-            Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name.StartsWith('.') -and ($SkipDirs -notcontains $_.Name.ToLowerInvariant()) } |
-                ForEach-Object { $all += $_.FullName }
-        }
-
-        # Running game directories
-        foreach ($r in $running) { $all += $r.Dir }
-
-        $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-        Add-FromRoots (@($all | Where-Object { $_ -and $seen.Add((Fix-Sep $_)) }))
-    }
-}
-
-# Collect jars (also one level of subfolders, e.g. mods\1.21\)
-$jars = @()
-foreach ($f in $folders) {
-    $files = @(Get-ChildItem -LiteralPath $f -Filter *.jar -File -Recurse -Depth 1 -ErrorAction SilentlyContinue)
-    foreach ($j in $files) {
-        $jars += [PSCustomObject]@{ Folder = $f; File = $j }
-    }
-}
-
-Write-Host "`r$(' ' * 60)`r" -NoNewline
-$withJars = @($jars | Select-Object -ExpandProperty Folder -Unique)
-
-if ($withJars.Count -eq 0) {
-    Write-Host 'No mods found.' -ForegroundColor Red
-    Write-Host 'Run it again and choose "Other" to type the path to your mods folder.' -ForegroundColor DarkGray
-    Wait-BeforeClose
-    exit 1
-}
-
-Write-Section "Mod folders found ($($withJars.Count))"
-foreach ($f in $withJars) {
-    $count = @($jars | Where-Object { $_.Folder -eq $f }).Count
-    Write-Host ("> {0,-11}" -f (Get-LauncherName $f)) -ForegroundColor White -NoNewline
-    Write-Host ("{0,4} jars  " -f $count) -ForegroundColor DarkGray -NoNewline
-    Write-Host (Get-ShortPath $f) -ForegroundColor Gray
-}
-Write-Host
-
-# ---------------------------------------------------------------- 2. hash
-
-$i = 0
-foreach ($j in $jars) {
-    $i++
-    Write-Host "`r[*] Hashing $i / $($jars.Count)" -ForegroundColor Yellow -NoNewline
-    try { $h = (Get-FileHash -LiteralPath $j.File.FullName -Algorithm SHA1).Hash.ToLowerInvariant() } catch { $h = $null }
-    $j | Add-Member -NotePropertyName Hash -NotePropertyValue $h
-}
-$hashes = @($jars | Where-Object { $_.Hash } | Select-Object -ExpandProperty Hash -Unique)
-
-# ---------------------------------------------------------------- 3. look up
-
-$known = @{}   # hash -> mod name
-
-if (-not $Offline -and $hashes.Count -gt 0) {
-    Write-Host "`r[*] Checking $($hashes.Count) unique mods on Modrinth...      " -ForegroundColor Yellow -NoNewline
-    $projectIdByHash = @{}
-    try {
-        for ($n = 0; $n -lt $hashes.Count; $n += 500) {
-            $chunk = @($hashes[$n..([math]::Min($n + 499, $hashes.Count - 1))])
-            $body  = @{ hashes = $chunk; algorithm = 'sha1' } | ConvertTo-Json -Compress
-            $resp  = Invoke-Json 'https://api.modrinth.com/v2/version_files' 'Post' $body
-            foreach ($prop in $resp.PSObject.Properties) {
-                if ($prop.Value.project_id) { $projectIdByHash[$prop.Name.ToLowerInvariant()] = $prop.Value.project_id }
-            }
-        }
-        $ids = @($projectIdByHash.Values | Select-Object -Unique)
-        $titleById = @{}
-        for ($n = 0; $n -lt $ids.Count; $n += 100) {
-            $chunk = @($ids[$n..([math]::Min($n + 99, $ids.Count - 1))])
-            $q = [uri]::EscapeDataString((ConvertTo-Json -InputObject $chunk -Compress))
-            foreach ($proj in (Invoke-Json "https://api.modrinth.com/v2/projects?ids=$q")) { $titleById[$proj.id] = $proj.title }
-        }
-        foreach ($h in $projectIdByHash.Keys) {
-            $t = $titleById[$projectIdByHash[$h]]
-            if (-not $t) { $t = '(Modrinth project)' }
-            $known[$h] = "$t"
-        }
-    } catch {
-        Write-Host "`r[!] Modrinth lookup failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-
-    $left = @($hashes | Where-Object { -not $known.ContainsKey($_) })
-    $i = 0
-    foreach ($h in $left) {
-        $i++
-        Write-Host "`r[*] Checking Megabase $i / $($left.Count)              " -ForegroundColor Yellow -NoNewline
         try {
-            $r = Invoke-Json "https://megabase.vercel.app/api/query?hash=$h"
-            if (-not $r.error -and $r.data -and $r.data.name) { $known[$h] = "$($r.data.name)" }
-        } catch {}
-    }
-}
-
-if (-not $Offline) {
-    try {
-        $list = Invoke-RestMethod -Uri $TrustedListUrl -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 15
-        foreach ($line in ([string]$list -split "`n")) {
-            if ($line -match '^\s*([0-9a-fA-F]{40})\s+(.+?)\s*$') { $TrustedMods[$Matches[1].ToLowerInvariant()] = $Matches[2] }
+            Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argLine -ErrorAction Stop
+            Write-Host 'Continuing in the administrator window. You can close this one.' -ForegroundColor Green
+            Start-Sleep -Seconds 2
+            return
+        } catch {
+            Write-Host 'Administrator was declined - continuing with what a normal user can see.' -ForegroundColor Yellow
         }
-    } catch {}
-}
-foreach ($h in $hashes) {
-    if ($TrustedMods.ContainsKey($h)) { $known[$h] = "$($TrustedMods[$h]) (trusted)" }
+    }
+    Write-Host
 }
 
-# CurseForge by fingerprint
-if (-not $CurseForgeApiKey -and $env:MODANZER_CF_KEY) { $CurseForgeApiKey = $env:MODANZER_CF_KEY }
-if (-not $Offline -and ($CurseForgeApiKey -or $CurseForgeProxyUrl)) {
-    $left = @($hashes | Where-Object { -not $known.ContainsKey($_) })
-    if ($left.Count -gt 0) {
-        $hashByFp = @{}
+function Invoke-ModAnalyzer {
+    $running = @(Get-RunningGameDirs)
+    if ($running.Count -gt 0) {
+        Write-Section 'Running Minecraft'
+        foreach ($r in $running) {
+            $up = ''
+            if ($r.Started) {
+                $t = (Get-Date) - $r.Started
+                $up = ' - up {0}h {1}m {2}s' -f [int][math]::Floor($t.TotalHours), $t.Minutes, $t.Seconds
+            }
+            Write-Host "> PID $($r.Pid)$up" -ForegroundColor White
+            Write-Host "  $(Get-ShortPath $r.Dir)" -ForegroundColor Gray
+        }
+        Write-Host
+    }
+
+    $folders = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+    function Fix-Sep([string]$p) { return $p.Replace('\', [IO.Path]::DirectorySeparatorChar) }
+
+    $home_ = $env:USERPROFILE
+    $Launchers = @(
+        @{ Name = 'Minecraft Launcher (.minecraft, Badlion, SKLauncher)'; Roots = @("$env:APPDATA\.minecraft") },
+        @{ Name = 'CurseForge';            Roots = @("$home_\curseforge\minecraft\Instances", "$home_\Documents\curseforge\minecraft\Instances", "$home_\Twitch\Minecraft\Instances") },
+        @{ Name = 'Modrinth App';          Roots = @("$env:APPDATA\ModrinthApp", "$env:APPDATA\com.modrinth.theseus") },
+        @{ Name = 'Prism / MultiMC / PolyMC'; Roots = @("$env:APPDATA\PrismLauncher", "$env:APPDATA\PolyMC", "$env:LOCALAPPDATA\Programs\PrismLauncher", "$env:LOCALAPPDATA\Programs\MultiMC") },
+        @{ Name = 'ATLauncher';            Roots = @("$env:APPDATA\ATLauncher") },
+        @{ Name = 'GDLauncher';            Roots = @("$env:APPDATA\gdlauncher_next", "$env:APPDATA\gdlauncher_carbon") },
+        @{ Name = 'Lunar Client';          Roots = @("$home_\.lunarclient") },
+        @{ Name = 'Dawn Client (formerly Feather)'; Roots = @("$env:APPDATA\.dawn", "$home_\.dawn", "$env:APPDATA\.feather") },
+        @{ Name = 'Fast Client';           Roots = @("$env:APPDATA\.fastclient", "$home_\.fastclient", "$env:APPDATA\FastClient", "$env:LOCALAPPDATA\FastClient", "$env:LOCALAPPDATA\Programs\FastClient") },
+        @{ Name = 'TLauncher';             Roots = @("$env:APPDATA\.tlauncher", "$env:APPDATA\.minecraft") },
+        @{ Name = 'Technic';               Roots = @("$env:APPDATA\.technic") }
+    )
+
+    # Add the mods folders found under each root
+    function Add-FromRoots($rootList) {
+        foreach ($root in $rootList) {
+            if (-not $root) { continue }
+            $root = Fix-Sep $root
+            if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+            $leaf = [IO.Path]::GetFileName($root.TrimEnd('\', '/'))
+            if ($ModFolderNames -contains $leaf.ToLowerInvariant()) { [void]$folders.Add($root); continue }
+            foreach ($f in (Find-ModFolders $root)) { [void]$folders.Add($f) }
+        }
+    }
+
+    # A folder the user typed: use it if it holds jars, otherwise look for mods folders inside it
+    function Add-UserFolder([string]$p) {
+        $p = $p.Trim().Trim('"').Trim("'")
+        if ($p -and -not (Test-Path -LiteralPath $p -PathType Container) -and (Test-Path -LiteralPath (Fix-Sep $p) -PathType Container)) { $p = Fix-Sep $p }
+        if (-not $p -or -not (Test-Path -LiteralPath $p -PathType Container)) { return $false }
+        $p = (Resolve-Path -LiteralPath $p).ProviderPath
+        $before = $folders.Count
+        if (Get-ChildItem -LiteralPath $p -Filter *.jar -File -Recurse -Depth 1 -ErrorAction SilentlyContinue | Select-Object -First 1) {
+            [void]$folders.Add($p)
+        }
+        foreach ($f in (Find-ModFolders $p)) { [void]$folders.Add($f) }
+        if ($folders.Count -eq $before) { [void]$folders.Add($p) }
+        return $true
+    }
+
+    if ($Path) {
+        foreach ($p in $Path) {
+            if (-not (Add-UserFolder $p)) { Write-Host "Not a folder: $p" -ForegroundColor Red }
+        }
+    } else {
+        $otherNum = $Launchers.Count + 2
+        Write-Host 'Which launcher do you use?' -ForegroundColor White
+        Write-Host '  1) ' -ForegroundColor Yellow -NoNewline; Write-Host 'Scan everything (auto-detect)  ' -NoNewline; Write-Host '[default]' -ForegroundColor DarkGray
+        for ($n = 0; $n -lt $Launchers.Count; $n++) {
+            Write-Host ('{0,3}) ' -f ($n + 2)) -ForegroundColor Yellow -NoNewline; Write-Host $Launchers[$n].Name
+        }
+        Write-Host ('{0,3}) ' -f $otherNum) -ForegroundColor Yellow -NoNewline; Write-Host 'Other (type the path to your mods folder)'
+        Write-Host
+
+        $choice = $null
+        while ($null -eq $choice) {
+            $in = (Read-Host "Choose 1-$otherNum").Trim()
+            if ($in -eq '') { $in = '1' }
+            $num = 0
+            if ([int]::TryParse($in, [ref]$num) -and $num -ge 1 -and $num -le $otherNum) { $choice = $num }
+            else { Write-Host "Type a number from 1 to $otherNum." -ForegroundColor Red }
+        }
+        Write-Host
+
+        if ($choice -eq $otherNum) {
+            while ($true) {
+                $typed = Read-Host 'Path to the mods folder'
+                if (Add-UserFolder $typed) { break }
+                Write-Host 'That folder does not exist. Try again (you can paste it from File Explorer).' -ForegroundColor Red
+            }
+        } elseif ($choice -ge 2) {
+            $pick = $Launchers[$choice - 2]
+            Write-Host "[*] Looking for $($pick.Name) mods folders..." -ForegroundColor Yellow -NoNewline
+            Add-FromRoots $pick.Roots
+            if ($folders.Count -eq 0) {
+                Write-Host "`r$(' ' * 70)`r" -NoNewline
+                Write-Host "No $($pick.Name) mods folder found in the usual place." -ForegroundColor Red
+                while ($true) {
+                    $typed = Read-Host 'Paste the path to your mods folder (or press Enter to scan everything)'
+                    if (-not $typed.Trim()) { $choice = 1; break }
+                    if (Add-UserFolder $typed) { break }
+                    Write-Host 'That folder does not exist. Try again.' -ForegroundColor Red
+                }
+            }
+        }
+
+        if ($choice -eq 1) {
+            Write-Host '[*] Looking for mods folders...' -ForegroundColor Yellow -NoNewline
+            $all = @()
+            foreach ($l in $Launchers) { $all += $l.Roots }
+
+            # Microsoft Store launcher
+            Get-ChildItem -Path (Fix-Sep "$env:LOCALAPPDATA\Packages") -Directory -Filter 'Microsoft.4297127D64EC6_*' -ErrorAction SilentlyContinue |
+                ForEach-Object { $all += (Join-Path $_.FullName 'LocalCache\Roaming\.minecraft') }
+
+            # Any dot-folder in AppData\Roaming or the user folder (.dawn, .badlion, other clients)
+            foreach ($base in @($env:APPDATA, $home_)) {
+                if (-not $base) { continue }
+                Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name.StartsWith('.') -and ($SkipDirs -notcontains $_.Name.ToLowerInvariant()) } |
+                    ForEach-Object { $all += $_.FullName }
+            }
+
+            # Running game directories
+            foreach ($r in $running) { $all += $r.Dir }
+
+            $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            Add-FromRoots (@($all | Where-Object { $_ -and $seen.Add((Fix-Sep $_)) }))
+        }
+    }
+
+    # Collect jars (also one level of subfolders, e.g. mods\1.21\)
+    $jars = @()
+    foreach ($f in $folders) {
+        $files = @(Get-ChildItem -LiteralPath $f -Filter *.jar -File -Recurse -Depth 1 -ErrorAction SilentlyContinue)
+        foreach ($j in $files) {
+            $jars += [PSCustomObject]@{ Folder = $f; File = $j }
+        }
+    }
+
+    Write-Host "`r$(' ' * 60)`r" -NoNewline
+    $withJars = @($jars | Select-Object -ExpandProperty Folder -Unique)
+
+    if ($withJars.Count -eq 0) {
+        Write-Host 'No mods found.' -ForegroundColor Red
+        Write-Host 'Run it again and choose "Other" to type the path to your mods folder.' -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Section "Mod folders found ($($withJars.Count))"
+    foreach ($f in $withJars) {
+        $count = @($jars | Where-Object { $_.Folder -eq $f }).Count
+        Write-Host ("> {0,-11}" -f (Get-LauncherName $f)) -ForegroundColor White -NoNewline
+        Write-Host ("{0,4} jars  " -f $count) -ForegroundColor DarkGray -NoNewline
+        Write-Host (Get-ShortPath $f) -ForegroundColor Gray
+    }
+    Write-Host
+
+    # ---------------------------------------------------------------- 2. hash
+
+    $i = 0
+    foreach ($j in $jars) {
+        $i++
+        Write-Host "`r[*] Hashing $i / $($jars.Count)" -ForegroundColor Yellow -NoNewline
+        try { $h = (Get-FileHash -LiteralPath $j.File.FullName -Algorithm SHA1).Hash.ToLowerInvariant() } catch { $h = $null }
+        $j | Add-Member -NotePropertyName Hash -NotePropertyValue $h
+    }
+    $hashes = @($jars | Where-Object { $_.Hash } | Select-Object -ExpandProperty Hash -Unique)
+
+    # ---------------------------------------------------------------- 3. look up
+
+    $known = @{}   # hash -> mod name
+
+    if (-not $Offline -and $hashes.Count -gt 0) {
+        Write-Host "`r[*] Checking $($hashes.Count) unique mods on Modrinth...      " -ForegroundColor Yellow -NoNewline
+        $projectIdByHash = @{}
+        try {
+            for ($n = 0; $n -lt $hashes.Count; $n += 500) {
+                $chunk = @($hashes[$n..([math]::Min($n + 499, $hashes.Count - 1))])
+                $body  = @{ hashes = $chunk; algorithm = 'sha1' } | ConvertTo-Json -Compress
+                $resp  = Invoke-Json 'https://api.modrinth.com/v2/version_files' 'Post' $body
+                foreach ($prop in $resp.PSObject.Properties) {
+                    if ($prop.Value.project_id) { $projectIdByHash[$prop.Name.ToLowerInvariant()] = $prop.Value.project_id }
+                }
+            }
+            $ids = @($projectIdByHash.Values | Select-Object -Unique)
+            $titleById = @{}
+            for ($n = 0; $n -lt $ids.Count; $n += 100) {
+                $chunk = @($ids[$n..([math]::Min($n + 99, $ids.Count - 1))])
+                $q = [uri]::EscapeDataString((ConvertTo-Json -InputObject $chunk -Compress))
+                foreach ($proj in (Invoke-Json "https://api.modrinth.com/v2/projects?ids=$q")) { $titleById[$proj.id] = $proj.title }
+            }
+            foreach ($h in $projectIdByHash.Keys) {
+                $t = $titleById[$projectIdByHash[$h]]
+                if (-not $t) { $t = '(Modrinth project)' }
+                $known[$h] = "$t"
+            }
+        } catch {
+            Write-Host "`r[!] Modrinth lookup failed: $($_.Exception.Message)" -ForegroundColor Red
+        }
+
+        $left = @($hashes | Where-Object { -not $known.ContainsKey($_) })
         $i = 0
         foreach ($h in $left) {
             $i++
-            Write-Host "`r[*] CurseForge fingerprint $i / $($left.Count)              " -ForegroundColor Yellow -NoNewline
-            $file = ($jars | Where-Object { $_.Hash -eq $h } | Select-Object -First 1).File
-            try { $hashByFp[[string](Get-CurseForgeFingerprint $file.FullName)] = $h } catch {}
+            Write-Host "`r[*] Checking Megabase $i / $($left.Count)              " -ForegroundColor Yellow -NoNewline
+            try {
+                $r = Invoke-Json "https://megabase.vercel.app/api/query?hash=$h"
+                if (-not $r.error -and $r.data -and $r.data.name) { $known[$h] = "$($r.data.name)" }
+            } catch {}
         }
-        Write-Host "`r[*] Checking $($hashByFp.Count) mods on CurseForge...            " -ForegroundColor Yellow -NoNewline
-        $fpList = @($hashByFp.Keys | ForEach-Object { [uint32]$_ })
+    }
+
+    if (-not $Offline) {
         try {
-            $nameByFp = @{}
-            if ($CurseForgeApiKey) {
-                $cfHeaders = @{ 'x-api-key' = $CurseForgeApiKey; 'Accept' = 'application/json' }
-                $body = @{ fingerprints = $fpList } | ConvertTo-Json -Compress
-                $r = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/fingerprints/432' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
-                $modIdByFp = @{}
-                foreach ($m in @($r.data.exactMatches)) { $modIdByFp[[string]$m.file.fileFingerprint] = $m.file.modId }
-                if ($modIdByFp.Count -gt 0) {
-                    $body = @{ modIds = @($modIdByFp.Values | Select-Object -Unique) } | ConvertTo-Json -Compress
-                    $mods = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/mods' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
-                    $nameById = @{}
-                    foreach ($mod in @($mods.data)) { $nameById[[string]$mod.id] = $mod.name }
-                    foreach ($fp in $modIdByFp.Keys) { $nameByFp[$fp] = $nameById[[string]$modIdByFp[$fp]] }
-                }
-            } else {
-                for ($n = 0; $n -lt $fpList.Count; $n += 1000) {
-                    $chunk = @($fpList[$n..([math]::Min($n + 999, $fpList.Count - 1))])
-                    $body = @{ fingerprints = $chunk } | ConvertTo-Json -Compress
-                    $r = Invoke-RestMethod -Uri $CurseForgeProxyUrl -Method Post -Body $body -ContentType 'application/json' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
-                    foreach ($prop in $r.matches.PSObject.Properties) { $nameByFp[$prop.Name] = $prop.Value.name }
-                }
+            $list = Invoke-RestMethod -Uri $TrustedListUrl -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 15
+            foreach ($line in ([string]$list -split "`n")) {
+                if ($line -match '^\s*([0-9a-fA-F]{40})\s+(.+?)\s*$') { $TrustedMods[$Matches[1].ToLowerInvariant()] = $Matches[2] }
             }
-            foreach ($fp in $nameByFp.Keys) {
-                if ($hashByFp.ContainsKey($fp)) {
-                    $n = $nameByFp[$fp]
-                    if (-not $n) { $n = '(CurseForge project)' }
-                    $known[$hashByFp[$fp]] = "$n [CurseForge]"
-                }
+        } catch {}
+    }
+    foreach ($h in $hashes) {
+        if ($TrustedMods.ContainsKey($h)) { $known[$h] = "$($TrustedMods[$h]) (trusted)" }
+    }
+
+    # CurseForge by fingerprint
+    if (-not $CurseForgeApiKey -and $env:MODANZER_CF_KEY) { $CurseForgeApiKey = $env:MODANZER_CF_KEY }
+    if (-not $Offline -and ($CurseForgeApiKey -or $CurseForgeProxyUrl)) {
+        $left = @($hashes | Where-Object { -not $known.ContainsKey($_) })
+        if ($left.Count -gt 0) {
+            $hashByFp = @{}
+            $i = 0
+            foreach ($h in $left) {
+                $i++
+                Write-Host "`r[*] CurseForge fingerprint $i / $($left.Count)              " -ForegroundColor Yellow -NoNewline
+                $file = ($jars | Where-Object { $_.Hash -eq $h } | Select-Object -First 1).File
+                try { $hashByFp[[string](Get-CurseForgeFingerprint $file.FullName)] = $h } catch {}
             }
+            Write-Host "`r[*] Checking $($hashByFp.Count) mods on CurseForge...            " -ForegroundColor Yellow -NoNewline
+            $fpList = @($hashByFp.Keys | ForEach-Object { [uint32]$_ })
+            try {
+                $nameByFp = @{}
+                if ($CurseForgeApiKey) {
+                    $cfHeaders = @{ 'x-api-key' = $CurseForgeApiKey; 'Accept' = 'application/json' }
+                    $body = @{ fingerprints = $fpList } | ConvertTo-Json -Compress
+                    $r = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/fingerprints/432' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
+                    $modIdByFp = @{}
+                    foreach ($m in @($r.data.exactMatches)) { $modIdByFp[[string]$m.file.fileFingerprint] = $m.file.modId }
+                    if ($modIdByFp.Count -gt 0) {
+                        $body = @{ modIds = @($modIdByFp.Values | Select-Object -Unique) } | ConvertTo-Json -Compress
+                        $mods = Invoke-RestMethod -Uri 'https://api.curseforge.com/v1/mods' -Method Post -Body $body -ContentType 'application/json' -Headers $cfHeaders -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 20
+                        $nameById = @{}
+                        foreach ($mod in @($mods.data)) { $nameById[[string]$mod.id] = $mod.name }
+                        foreach ($fp in $modIdByFp.Keys) { $nameByFp[$fp] = $nameById[[string]$modIdByFp[$fp]] }
+                    }
+                } else {
+                    for ($n = 0; $n -lt $fpList.Count; $n += 1000) {
+                        $chunk = @($fpList[$n..([math]::Min($n + 999, $fpList.Count - 1))])
+                        $body = @{ fingerprints = $chunk } | ConvertTo-Json -Compress
+                        $r = Invoke-RestMethod -Uri $CurseForgeProxyUrl -Method Post -Body $body -ContentType 'application/json' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
+                        foreach ($prop in $r.matches.PSObject.Properties) { $nameByFp[$prop.Name] = $prop.Value.name }
+                    }
+                }
+                foreach ($fp in $nameByFp.Keys) {
+                    if ($hashByFp.ContainsKey($fp)) {
+                        $n = $nameByFp[$fp]
+                        if (-not $n) { $n = '(CurseForge project)' }
+                        $known[$hashByFp[$fp]] = "$n [CurseForge]"
+                    }
+                }
+            } catch {
+                $msg = $_.Exception.Message
+                try { if ($_.ErrorDetails.Message) { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error } } catch {}
+                Write-Host "`r[!] CurseForge lookup failed: $msg" -ForegroundColor Red
+            }
+        }
+    }
+
+    # ---------------------------------------------------------------- 4. scan unknown jars
+
+    $scanned = @{}   # hash -> list of hits
+    $unknownHashes = @($hashes | Where-Object { -not $known.ContainsKey($_) })
+    $i = 0
+    foreach ($h in $unknownHashes) {
+        $i++
+        Write-Host "`r[*] Scanning unknown mods for cheat strings $i / $($unknownHashes.Count)      " -ForegroundColor Yellow -NoNewline
+        $jar  = ($jars | Where-Object { $_.Hash -eq $h } | Select-Object -First 1).File
+        $hits = New-Object 'System.Collections.Generic.List[object]'
+        try {
+            $fs = [IO.File]::OpenRead($jar.FullName)
+            try { Search-Jar $fs $jar.Name $hits } finally { $fs.Dispose() }
         } catch {
-            $msg = $_.Exception.Message
-            try { if ($_.ErrorDetails.Message) { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error } } catch {}
-            Write-Host "`r[!] CurseForge lookup failed: $msg" -ForegroundColor Red
+            $hits.Add([PSCustomObject]@{ Where = $jar.Name; Strings = @("could not open: $($_.Exception.Message)") })
         }
+        $scanned[$h] = $hits
     }
-}
 
-# ---------------------------------------------------------------- 4. scan unknown jars
+    Write-Host "`r$(' ' * 80)`r" -NoNewline
 
-$scanned = @{}   # hash -> list of hits
-$unknownHashes = @($hashes | Where-Object { -not $known.ContainsKey($_) })
-$i = 0
-foreach ($h in $unknownHashes) {
-    $i++
-    Write-Host "`r[*] Scanning unknown mods for cheat strings $i / $($unknownHashes.Count)      " -ForegroundColor Yellow -NoNewline
-    $jar  = ($jars | Where-Object { $_.Hash -eq $h } | Select-Object -First 1).File
-    $hits = New-Object 'System.Collections.Generic.List[object]'
-    try {
-        $fs = [IO.File]::OpenRead($jar.FullName)
-        try { Search-Jar $fs $jar.Name $hits } finally { $fs.Dispose() }
-    } catch {
-        $hits.Add([PSCustomObject]@{ Where = $jar.Name; Strings = @("could not open: $($_.Exception.Message)") })
-    }
-    $scanned[$h] = $hits
-}
+    # ---------------------------------------------------------------- 5. report
 
-Write-Host "`r$(' ' * 80)`r" -NoNewline
+    $totalCheat = 0; $totalUnknown = 0; $totalVerified = 0; $totalCf = 0
+    $cheatList = New-Object 'System.Collections.Generic.List[object]'
 
-# ---------------------------------------------------------------- 5. report
-
-$totalCheat = 0; $totalUnknown = 0; $totalVerified = 0; $totalCf = 0
-$cheatList = New-Object 'System.Collections.Generic.List[object]'
-
-# "Launcher > instance" for a mods folder, e.g. "Modrinth > Atzlk_s PMW"
-function Get-InstanceLabel([string]$modsFolder) {
-    $launcher = Get-LauncherName $modsFolder
-    $parent = Split-Path -Parent $modsFolder
-    $inst = Split-Path -Leaf $parent
-    if ($inst -in @('.minecraft', 'minecraft', '')) {
-        $up = Split-Path -Leaf (Split-Path -Parent $parent)
-        if ($up -and $up -notin @('Roaming', 'AppData') -and -not $up.StartsWith('.')) { $inst = $up } else { $inst = $null }
-    }
-    if ($inst -and $inst.StartsWith('.')) { $inst = $null }
-    if ($inst -and $inst -ne $launcher -and ".$inst" -ne $launcher -and $inst -ne ".$launcher".TrimStart('.')) { return "$launcher > $inst" }
-    return $launcher
-}
-
-foreach ($f in $withJars) {
-    Write-Section "$(Get-LauncherName $f)  $(Get-ShortPath $f)"
-    $cfRecords = Get-CurseForgeRecords $f
-    $here = @($jars | Where-Object { $_.Folder -eq $f } | Sort-Object { $_.File.Name })
-
-    foreach ($j in $here) {
-        $name = $j.File.Name
-        if ($j.Hash -and $known.ContainsKey($j.Hash)) {
-            $totalVerified++
-            Write-Host ('  [OK]    {0,-32}' -f $known[$j.Hash]) -ForegroundColor Green -NoNewline
-            Write-Host $name -ForegroundColor DarkGray
-            continue
+    # "Launcher > instance" for a mods folder, e.g. "Modrinth > Atzlk_s PMW"
+    function Get-InstanceLabel([string]$modsFolder) {
+        $launcher = Get-LauncherName $modsFolder
+        $parent = Split-Path -Parent $modsFolder
+        $inst = Split-Path -Leaf $parent
+        if ($inst -in @('.minecraft', 'minecraft', '')) {
+            $up = Split-Path -Leaf (Split-Path -Parent $parent)
+            if ($up -and $up -notin @('Roaming', 'AppData') -and -not $up.StartsWith('.')) { $inst = $up } else { $inst = $null }
         }
-        $hits = $null
-        if ($j.Hash) { $hits = $scanned[$j.Hash] }
-        if ($hits -and $hits.Count -gt 0) {
-            $totalCheat++
-            Write-Host "  [CHEAT] $name" -ForegroundColor Red
-            foreach ($hit in $hits) {
-                Write-Host "          $($hit.Where): " -ForegroundColor Gray -NoNewline
-                Write-Host ($hit.Strings -join ', ') -ForegroundColor Magenta
+        if ($inst -and $inst.StartsWith('.')) { $inst = $null }
+        if ($inst -and $inst -ne $launcher -and ".$inst" -ne $launcher -and $inst -ne ".$launcher".TrimStart('.')) { return "$launcher > $inst" }
+        return $launcher
+    }
+
+    foreach ($f in $withJars) {
+        Write-Section "$(Get-LauncherName $f)  $(Get-ShortPath $f)"
+        $cfRecords = Get-CurseForgeRecords $f
+        $here = @($jars | Where-Object { $_.Folder -eq $f } | Sort-Object { $_.File.Name })
+
+        foreach ($j in $here) {
+            $name = $j.File.Name
+            if ($j.Hash -and $known.ContainsKey($j.Hash)) {
+                $totalVerified++
+                Write-Host ('  [OK]    {0,-32}' -f $known[$j.Hash]) -ForegroundColor Green -NoNewline
+                Write-Host $name -ForegroundColor DarkGray
+                continue
             }
-            Write-Host "          sha1: $($j.Hash)" -ForegroundColor DarkGray
-            $allStrings = @($hits | ForEach-Object { $_.Strings } | Select-Object -Unique)
-            $cheatList.Add([PSCustomObject]@{ Name = $name; Where = (Get-InstanceLabel $f); Strings = ($allStrings -join ', ') })
-        } elseif ($cfRecords.ContainsKey($name) -and (-not $cfRecords[$name].Length -or [int64]$cfRecords[$name].Length -eq $j.File.Length)) {
-            # Installed by the CurseForge app and no cheat names inside.
-            $totalCf++
-            Write-Host ('  [CF]    {0,-32}' -f $cfRecords[$name].Name) -ForegroundColor Cyan -NoNewline
-            Write-Host $name -ForegroundColor DarkGray
-        } else {
-            $totalUnknown++
-            Write-Host "  [?]     $name" -ForegroundColor DarkYellow
-            $zone = Get-ZoneIdentifier $j.File.FullName
-            if ($zone) { Write-Host "          downloaded from $zone" -ForegroundColor DarkGray }
+            $hits = $null
+            if ($j.Hash) { $hits = $scanned[$j.Hash] }
+            if ($hits -and $hits.Count -gt 0) {
+                $totalCheat++
+                Write-Host "  [CHEAT] $name" -ForegroundColor Red
+                foreach ($hit in $hits) {
+                    Write-Host "          $($hit.Where): " -ForegroundColor Gray -NoNewline
+                    Write-Host ($hit.Strings -join ', ') -ForegroundColor Magenta
+                }
+                Write-Host "          sha1: $($j.Hash)" -ForegroundColor DarkGray
+                $allStrings = @($hits | ForEach-Object { $_.Strings } | Select-Object -Unique)
+                $cheatList.Add([PSCustomObject]@{ Name = $name; Where = (Get-InstanceLabel $f); Strings = ($allStrings -join ', ') })
+            } elseif ($cfRecords.ContainsKey($name) -and (-not $cfRecords[$name].Length -or [int64]$cfRecords[$name].Length -eq $j.File.Length)) {
+                # Installed by the CurseForge app and no cheat names inside.
+                $totalCf++
+                Write-Host ('  [CF]    {0,-32}' -f $cfRecords[$name].Name) -ForegroundColor Cyan -NoNewline
+                Write-Host $name -ForegroundColor DarkGray
+            } else {
+                $totalUnknown++
+                Write-Host "  [?]     $name" -ForegroundColor DarkYellow
+                $zone = Get-ZoneIdentifier $j.File.FullName
+                if ($zone) { Write-Host "          downloaded from $zone" -ForegroundColor DarkGray }
+            }
+        }
+        Write-Host
+    }
+
+    Write-Section 'Summary'
+    Write-Host "  Verified: $totalVerified" -ForegroundColor Green
+    if ($totalCf -gt 0) { Write-Host "  CF app:   $totalCf  (installed by the CurseForge app, no cheat names found)" -ForegroundColor Cyan }
+    Write-Host "  Unknown:  $totalUnknown" -ForegroundColor DarkYellow
+    Write-Host "  Cheat:    $totalCheat"   -ForegroundColor $(if ($totalCheat -gt 0) { 'Red' } else { 'Gray' })
+    if ($Offline) { Write-Host '  (offline mode - no online lookups were made)' -ForegroundColor DarkGray }
+
+    if ($cheatList.Count -gt 0) {
+        Write-Host
+        Write-Section "Cheats found ($($cheatList.Count))"
+        foreach ($group in ($cheatList | Group-Object Where)) {
+            Write-Host "  $($group.Name)" -ForegroundColor White
+            foreach ($c in $group.Group) {
+                Write-Host "    [CHEAT] $($c.Name)  " -ForegroundColor Red -NoNewline
+                Write-Host $c.Strings -ForegroundColor Magenta
+            }
         }
     }
     Write-Host
+    Write-Host 'Unknown does not mean cheat - it just is not on Modrinth/Megabase/CurseForge. Cheat hits are name matches; check them by hand.' -ForegroundColor DarkGray
 }
 
-Write-Section 'Summary'
-Write-Host "  Verified: $totalVerified" -ForegroundColor Green
-if ($totalCf -gt 0) { Write-Host "  CF app:   $totalCf  (installed by the CurseForge app, no cheat names found)" -ForegroundColor Cyan }
-Write-Host "  Unknown:  $totalUnknown" -ForegroundColor DarkYellow
-Write-Host "  Cheat:    $totalCheat"   -ForegroundColor $(if ($totalCheat -gt 0) { 'Red' } else { 'Gray' })
-if ($Offline) { Write-Host '  (offline mode - no online lookups were made)' -ForegroundColor DarkGray }
-
-if ($cheatList.Count -gt 0) {
-    Write-Host
-    Write-Section "Cheats found ($($cheatList.Count))"
-    foreach ($group in ($cheatList | Group-Object Where)) {
-        Write-Host "  $($group.Name)" -ForegroundColor White
-        foreach ($c in $group.Group) {
-            Write-Host "    [CHEAT] $($c.Name)  " -ForegroundColor Red -NoNewline
-            Write-Host $c.Strings -ForegroundColor Magenta
-        }
+switch ($Mode) {
+    'mods'      { Invoke-ModAnalyzer }
+    'injection' { Start-InjectionChecker }
+    'system'    { Invoke-SystemCheck }
+    'full'      {
+        Invoke-ModAnalyzer
+        Write-Host; Write-Host ('=' * 70) -ForegroundColor DarkGray; Write-Host
+        Invoke-SystemCheck
+        Write-Host ('=' * 70) -ForegroundColor DarkGray; Write-Host
+        Start-InjectionChecker
     }
 }
-Write-Host
-Write-Host 'Unknown does not mean cheat - it just is not on Modrinth/Megabase/CurseForge. Cheat hits are name matches; check them by hand.' -ForegroundColor DarkGray
 Wait-BeforeClose

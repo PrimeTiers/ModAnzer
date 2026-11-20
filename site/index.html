@@ -113,13 +113,13 @@
   </header>
 
   <div class="notice">
-    <strong>Not a hacking or malware tool.</strong> It's read-only and open source. It checks mods and watches the game, then shows the results on screen. Nothing is uploaded except mod fingerprints.
+    <strong>Not a hacking or malware tool.</strong> It only reads, and it's open source. It checks mods, the running game and Windows' records, then shows the results on screen. Nothing is uploaded except mod fingerprints.
   </div>
 
   <div class="grid">
     <section class="card">
       <h2>Windows</h2>
-      <p class="sub">Mod Analyzer + Injection Checker</p>
+      <p class="sub">Mod Analyzer, Injection Checker, System Check</p>
 
       <div class="label">Paste into PowerShell</div>
       <div class="cmd">
@@ -148,9 +148,11 @@
   </div>
 
   <section class="tools">
-    <h2>Two tools</h2>
+    <h2>What it checks</h2>
     <p class="tool"><b>1. Mod Analyzer</b> finds every mods folder (vanilla, CurseForge, Modrinth, Prism, Lunar, Dawn, Fast Client and more), checks each mod against Modrinth, Megabase and CurseForge, and searches unknown mods for cheat module names. It ends with a list of every cheat and which instance it was in.</p>
-    <p class="tool"><b>2. Injection Checker</b> runs while the game is open. It checks the launch options and the DLLs loaded into Minecraft, then watches live during the fight for injected DLLs, mods swapped in or out, and programs started from Downloads, Desktop or Temp.</p>
+    <p class="tool"><b>2. Injection Checker</b> runs while the game is open. It checks the launch options and loaded DLLs, reads Minecraft's memory (read-only) for cheat names and hidden manual-mapped programs, then watches live for injected DLLs, swapped mods and programs started from Downloads, Desktop or Temp.</p>
+    <p class="tool"><b>3. System Check</b> looks for traces: programs that ran and were deleted (BAM, Prefetch), cheat tools, cleared event logs and PowerShell history, logging services turned off, USB drives, the Recycle Bin, recent downloads, virtual machines and alt account names.</p>
+    <p class="tool"><b>4. Full Screenshare</b> runs all three in a row. For options 2&ndash;4 it asks for administrator rights so it can read Windows' records; the player can say no.</p>
   </section>
 
   <section class="facts">
@@ -159,7 +161,9 @@
       <ul>
         <li>Read your mods folders and fingerprint the .jar files</li>
         <li>Look fingerprints up on Modrinth, Megabase and CurseForge</li>
-        <li>List the DLLs loaded into Minecraft and watch for new ones</li>
+        <li>Read Minecraft's loaded DLLs and memory, without changing anything</li>
+        <li>Read Windows' records of programs that ran, logs and USB drives</li>
+        <li>List Minecraft account names (never tokens or emails)</li>
         <li>Show everything on screen</li>
       </ul>
     </div>
@@ -167,8 +171,8 @@
       <h3>It doesn't</h3>
       <ul>
         <li>Upload files or send anything but mod fingerprints</li>
-        <li>Read passwords, tokens, Discord or browser data</li>
-        <li>Read or change game memory</li>
+        <li>Read passwords, tokens, emails, Discord or browser data</li>
+        <li>Change game memory or inject into any program</li>
         <li>Change, move or delete files, or install anything</li>
       </ul>
     </div>
