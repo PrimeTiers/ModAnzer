@@ -1,0 +1,597 @@
+From bf2c0d40a82ce2a2eeeae8f162253bd01260ff39 Mon Sep 17 00:00:00 2001
+From: napatc1 <napatchoomchaiyot@gmail.com>
+Date: Sat, 21 Nov 2026 15:02:29 +0000
+Subject: [PATCH 1/3] Give players a reference code instead of asking for their
+ Discord ID
+
+- The report server saves each report under a random 6-character code
+  (like 7k3qxf) and sends it back. The player gives it to staff, who run
+  /ssresult refcode:7k3qxf user:@player in the PrimeTiers bot.
+- ModAnzer.exe: the Discord ID box is gone. Get code sends the results and
+  shows the code, and copies it.
+- ModAnzer.ps1: Press Enter to send and get your code. -DiscordId is gone.
+
+Catch cheats and PvP macros that are published on Modrinth:
+- Recognised mods now count as [CHEAT] when their Modrinth slug or SHA1 is
+  in flagged.txt, when their name says what they do (AutoTotem, Crystal
+  Macro, TriggerBot...), or when their jar has a class named like a cheat
+  module. flagged.txt can be edited on GitHub without a release.
+---
+ ModAnzer.ps1                                | 104 +++++++++++++++-----
+ README.md                                   |  17 ++--
+ exe/MainForm.cs                             |  64 ++++++------
+ flagged.txt                                 |  10 ++
+ site/index.html                             |   4 +-
+ supabase/functions/modanzer-report/index.ts |  41 +++++---
+ 6 files changed, 163 insertions(+), 77 deletions(-)
+ create mode 100644 flagged.txt
+
+diff --git a/ModAnzer.ps1 b/ModAnzer.ps1
+index 162446a..76db9a2 100644
+--- a/ModAnzer.ps1
++++ b/ModAnzer.ps1
+@@ -56,9 +56,6 @@
+     Write the results report (JSON, user folders hidden) to this file instead of
+     asking to send it. Used by ModAnzer.exe, which sends it with its own button.
+ 
+-.PARAMETER DiscordId
+-    Your Discord user ID, sent with the results (used with -NoPause instead of asking).
+-
+ .PARAMETER NoPause
+     Don't wait for Enter at the end (by default it waits, so the window
+     stays open when started with right-click > Run with PowerShell).
+@@ -77,7 +74,6 @@ param(
+     [string]$Mode = '',
+     [int]$LiveSeconds = 0,
+     [switch]$NoSend,
+-    [string]$DiscordId = '',
+     [string]$Launcher = '',
+     [string]$StopFile = '',
+     [string]$ReportOut = ''
+@@ -110,6 +106,8 @@ $CheatStrings = @(
+     'KillAura', 'CrystalAura', 'AnchorAura', 'AutoClicker'
+ )
+ $CheatRegex = [regex]::new(($CheatStrings | ForEach-Object { [regex]::Escape($_) }) -join '|')
++# A class named exactly like a cheat module, e.g. AutoTotem.class or TriggerBotModule.class.
++$CheatClassRegex = [regex]::new('^(?:' + (($CheatStrings | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')(?:Module|Hack|Feature|Mod)?$')
+ 
+ # Weak names: also ordinary game-code words (getVelocity, renderHitboxes, controller
+ # aim assist...). They only count when they are a whole name on their own: a class
+@@ -132,7 +130,16 @@ $TrustedMods = @{
+ 
+ # Extra trusted mods are also read from this file in the GitHub repo, so new
+ # versions can be added by editing trusted.txt on GitHub (no script change needed).
+-$TrustedListUrl = 'https://raw.githubusercontent.com/napatc1/ModAnzer/main/trusted.txt'
++$TrustedListUrl = 'https://raw.githubusercontent.com/PrimeTiers/ModAnzer/main/trusted.txt'
++
++# Cheats and PvP macros that are published on Modrinth (or Megabase/CurseForge) still count
++# as cheats. A known mod is flagged when:
++#  - its Modrinth slug or SHA1 is listed in flagged.txt in the GitHub repo (edit it on GitHub,
++#    no script change needed), or
++#  - its name says what it does (FlaggedNameRegex: "AutoTotem", "Crystal Macro"...), or
++#  - its jar has a class named like a cheat module (AutoTotem.class, TriggerBot.class...).
++$FlaggedListUrl = 'https://raw.githubusercontent.com/PrimeTiers/ModAnzer/main/flagged.txt'
++$FlaggedNameRegex = [regex]::new('(?ix) \bmacros?\b | auto[\s_-]?(totem|crystal|anchor|pot|clicker|click|hit|double[\s_-]?hand|shield[\s_-]?break) | trigger[\s_-]?bot | (crystal|anchor|kill)[\s_-]?aura | aim[\s_-]?(assist|bot|lock) | (inventory|legit|hover)[\s_-]?totem | jump[\s_-]?reset | ping[\s_-]?spoof | axe[\s_-]?spam | web[\s_-]?macro | self[\s_-]?destruct')
+ 
+ # CurseForge lookups go through ModAnzer's small server, which keeps the CurseForge
+ # API key private (source: supabase/functions/modanzer-cf in the repo). Only CurseForge
+@@ -143,9 +150,9 @@ $CurseForgeProxyUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/mod
+ # CurseForge directly instead. Can also be set with the MODANZER_CF_KEY environment variable.
+ $CurseForgeApiKey = ''
+ 
+-# Screenshare reports: when the scan ends the player can press Enter to send the results
+-# to staff. They go to ModAnzer's server (source: supabase/functions/modanzer-report),
+-# which saves them for the server's Discord bot to post in its mod-check channel.
++# Screenshare reports: when the scan ends the player can press Enter to send the results.
++# ModAnzer's server (source: supabase/functions/modanzer-report) saves them and sends back a
++# short code. The player gives the code to staff, who run /ssresult in the Discord bot.
+ $ReportServerName = 'PrimeTiers'
+ $ReportUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/modanzer-report'
+ $script:RunReport = [ordered]@{ Mods = $null; System = $null; Injection = $null; Accounts = @() }
+@@ -1417,6 +1424,7 @@ function Invoke-ModAnalyzer {
+     # ---------------------------------------------------------------- 3. look up
+ 
+     $known = @{}   # hash -> mod name
++    $slugByHash = @{}   # hash -> Modrinth slug
+ 
+     if (-not $Offline -and $hashes.Count -gt 0) {
+         Write-Host "`r[*] Checking $($hashes.Count) unique mods on Modrinth...      " -ForegroundColor Yellow -NoNewline
+@@ -1432,15 +1440,17 @@ function Invoke-ModAnalyzer {
+             }
+             $ids = @($projectIdByHash.Values | Select-Object -Unique)
+             $titleById = @{}
++            $slugById = @{}
+             for ($n = 0; $n -lt $ids.Count; $n += 100) {
+                 $chunk = @($ids[$n..([math]::Min($n + 99, $ids.Count - 1))])
+                 $q = [uri]::EscapeDataString((ConvertTo-Json -InputObject $chunk -Compress))
+-                foreach ($proj in (Invoke-Json "https://api.modrinth.com/v2/projects?ids=$q")) { $titleById[$proj.id] = $proj.title }
++                foreach ($proj in (Invoke-Json "https://api.modrinth.com/v2/projects?ids=$q")) { $titleById[$proj.id] = $proj.title; $slugById[$proj.id] = $proj.slug }
+             }
+             foreach ($h in $projectIdByHash.Keys) {
+                 $t = $titleById[$projectIdByHash[$h]]
+                 if (-not $t) { $t = '(Modrinth project)' }
+                 $known[$h] = "$t"
++                if ($slugById[$projectIdByHash[$h]]) { $slugByHash[$h] = [string]$slugById[$projectIdByHash[$h]] }
+             }
+         } catch {
+             Write-Host "`r[!] Modrinth lookup failed: $($_.Exception.Message)" -ForegroundColor Red
+@@ -1523,6 +1533,47 @@ function Invoke-ModAnalyzer {
+         }
+     }
+ 
++    # ---------------------------------------------------------------- 3b. cheats among known mods
++
++    $flagged = @{}   # hash -> why a known mod counts as a cheat
++    $flaggedSlugs = @{}; $flaggedHashes = @{}
++    if (-not $Offline) {
++        try {
++            $list = Invoke-RestMethod -Uri $FlaggedListUrl -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 15
++            foreach ($line in ([string]$list -split "`n")) {
++                $line = ($line -replace '#.*$', '').Trim()
++                if ($line -match '^([0-9a-fA-F]{40})(?:\s+(.+))?$') { $flaggedHashes[$Matches[1].ToLowerInvariant()] = "$($Matches[2])" }
++                elseif ($line -match '^([A-Za-z0-9_.-]+)(?:\s+(.+))?$') { $flaggedSlugs[$Matches[1].ToLowerInvariant()] = "$($Matches[2])" }
++            }
++        } catch {}
++    }
++    $knownHashes = @($hashes | Where-Object { $known.ContainsKey($_) -and -not $TrustedMods.ContainsKey($_) })
++    $jarByHash = @{}
++    foreach ($j in $jars) { if ($j.Hash -and -not $jarByHash.ContainsKey($j.Hash)) { $jarByHash[$j.Hash] = $j.File } }
++    $i = 0
++    foreach ($h in $knownHashes) {
++        $i++
++        Write-Host "`r[*] Checking known mods for cheats $i / $($knownHashes.Count)      " -ForegroundColor Yellow -NoNewline
++        $slug = [string]$slugByHash[$h]
++        if ($flaggedHashes.ContainsKey($h)) { $flagged[$h] = "on the flagged list $($flaggedHashes[$h])".Trim(); continue }
++        if ($slug -and $flaggedSlugs.ContainsKey($slug.ToLowerInvariant())) { $flagged[$h] = "flagged Modrinth project '$slug' $($flaggedSlugs[$slug.ToLowerInvariant()])".Trim(); continue }
++        $nm = $FlaggedNameRegex.Match("$($known[$h]) $slug")
++        if ($nm.Success) { $flagged[$h] = "name says '$($nm.Value.Trim())'"; continue }
++        # Class names only (no unpacking), so this stays quick even with hundreds of mods.
++        $jar = $jarByHash[$h]
++        $zip = $null
++        try {
++            $zip = [IO.Compression.ZipFile]::OpenRead($jar.FullName)
++            $found = New-Object 'System.Collections.Generic.HashSet[string]'
++            foreach ($entry in $zip.Entries) {
++                if (-not $entry.FullName.EndsWith('.class')) { continue }
++                $leaf = [IO.Path]::GetFileNameWithoutExtension($entry.Name) -replace '\$.*$', ''
++                if ($CheatClassRegex.IsMatch($leaf)) { [void]$found.Add($leaf) }
++            }
++            if ($found.Count -gt 0) { $flagged[$h] = "has cheat modules: $(@($found | Sort-Object) -join ', ')" }
++        } catch {} finally { if ($zip) { $zip.Dispose() } }
++    }
++
+     # ---------------------------------------------------------------- 4. scan unknown jars
+ 
+     $scanned = @{}   # hash -> list of hits
+@@ -1574,6 +1625,17 @@ function Invoke-ModAnalyzer {
+         foreach ($j in $here) {
+             $name = $j.File.Name
+             $where = Get-InstanceLabel $f
++            if ($j.Hash -and $flagged.ContainsKey($j.Hash)) {
++                # Published on Modrinth/Megabase/CurseForge, but it is a cheat or PvP macro.
++                $totalCheat++
++                $why = "$($known[$j.Hash]): $($flagged[$j.Hash])"
++                $allList.Add([ordered]@{ Status = 'CHEAT'; Name = $name; Title = $why; Where = $where })
++                Write-Host "  [CHEAT] $name" -ForegroundColor Red
++                Write-Host "          known as $($known[$j.Hash]), but: $($flagged[$j.Hash])" -ForegroundColor Magenta
++                Write-Host "          sha1: $($j.Hash)" -ForegroundColor DarkGray
++                $cheatList.Add([PSCustomObject]@{ Name = $name; Where = $where; Strings = $why })
++                continue
++            }
+             if ($j.Hash -and $known.ContainsKey($j.Hash)) {
+                 $totalVerified++
+                 $allList.Add([ordered]@{ Status = 'OK'; Name = $name; Title = [string]$known[$j.Hash]; Where = $where })
+@@ -1702,24 +1764,20 @@ function Send-Report {
+     }
+     Write-Host
+     Write-Host "Send these results to $ReportServerName staff? Close this window to not send." -ForegroundColor White
+-    $sendId = ''
+-    if ($NoPause) { $sendId = $DiscordId }
+-    else {
+-        Write-Host '  (Discord: Settings > Advanced > turn on Developer Mode, then right-click your name > Copy User ID)' -ForegroundColor DarkGray
+-        while ($true) {
+-            $sendId = (Read-Host 'What is your Discord ID').Trim()
+-            if ($sendId -match '^\d{17,20}$') { break }
+-            Write-Host '  A Discord ID is a long number, like 123456789012345678. Try again.' -ForegroundColor Red
+-        }
+-        Read-Host 'Press Enter to send data' | Out-Null
+-    }
+-    if ($sendId -match '^\d{17,20}$') { $report['discordId'] = $sendId }
++    if (-not $NoPause) { Read-Host 'Press Enter to send and get your code' | Out-Null }
+     Write-Host "[*] Sending..." -ForegroundColor Yellow -NoNewline
+     try {
+         $body = '{"report":' + (Remove-UserInfo $report) + '}'
+         $bytes = [Text.Encoding]::UTF8.GetBytes($body)
+-        $null = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
+-        Write-Host "`r[+] Sent. $ReportServerName staff will see the results in their mod-check channel." -ForegroundColor Green
++        $resp = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
++        Write-Host "`r[+] Sent.                    " -ForegroundColor Green
++        if ($resp.code) {
++            Write-Host
++            Write-Host "    Your code: " -ForegroundColor White -NoNewline
++            Write-Host "$($resp.code)" -ForegroundColor Yellow
++            Write-Host "    Give this code to $ReportServerName staff. Only staff can see your results with it." -ForegroundColor Gray
++            try { Set-Clipboard -Value "$($resp.code)" -ErrorAction Stop; Write-Host '    (copied to your clipboard)' -ForegroundColor DarkGray } catch {}
++        }
+     } catch {
+         $msg = $_.Exception.Message
+         try { if ($_.ErrorDetails.Message) { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error } } catch {}
+diff --git a/README.md b/README.md
+index f2ec7de..0d0bb33 100644
+--- a/README.md
++++ b/README.md
+@@ -16,7 +16,7 @@ powershell -ExecutionPolicy Bypass -NoProfile -Command "iex ((irm https://modanz
+ 
+ ## Run it
+ 
+-**Easiest:** download **[ModAnzer.exe](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.exe)** and open it. It is a small Windows app in PrimeTiers colours: pick a check, press **Start scan**, then enter your Discord ID and press **Send**. It runs the same `ModAnzer.ps1` (built into the exe) with Windows PowerShell 5.1 and needs .NET Framework 4.8, which Windows 10 and 11 already have. The source is in [`exe/`](exe). If Windows SmartScreen appears, click **More info → Run anyway**.
++**Easiest:** download **[ModAnzer.exe](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.exe)** and open it. It is a small Windows app in PrimeTiers colours: pick a check, press **Start scan**, then press **Get code** and give the code to staff. It runs the same `ModAnzer.ps1` (built into the exe) with Windows PowerShell 5.1 and needs .NET Framework 4.8, which Windows 10 and 11 already have. The source is in [`exe/`](exe). If Windows SmartScreen appears, click **More info → Run anyway**.
+ 
+ **Or:** download **[ModAnzer.bat](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.bat)** and double-click it. It runs the `ModAnzer.ps1` next to it if there is one, and otherwise downloads the latest version from the website. If Windows SmartScreen appears, click **More info → Run anyway**.
+ 
+@@ -93,10 +93,10 @@ Everything is a lead, not proof. Check each one with the player.
+ 
+ ### Sending results to staff
+ 
+-When the scan ends, ModAnzer asks **"What is your Discord ID"**, then shows **"Press Enter to send data"**. Pressing Enter sends a summary of the results to PrimeTiers staff; closing the window instead sends nothing. Use `-NoSend` to skip this, or `-NoPause -DiscordId <id>` to send without asking.
++When the scan ends, ModAnzer shows **"Press Enter to send and get your code"** (in the app: the **Get code** button). Sending saves the results on ModAnzer's server and shows a 6-character code, like `7k3qxf`. The player gives the code to staff, and staff run `/ssresult refcode:7k3qxf user:@player` in the PrimeTiers bot to see the report. Closing the window instead sends nothing. Use `-NoSend` to skip this, or `-NoPause` to send without asking.
+ 
+-- Reports go to ModAnzer's server ([`supabase/functions/modanzer-report`](supabase/functions/modanzer-report/index.ts)), which saves them in the PrimeTiers bot's MongoDB, in the `modanzer_reports` collection with `status: "new"`. The PrimeTiers bot picks up new reports and posts them in `#mod-check`.
+-- The server keeps only the fields ModAnzer sends, caps their sizes, and accepts only a real Discord ID (17–20 digits). It rate-limits each sender to 6 reports a minute and doesn't store IP addresses.
++- Reports go to ModAnzer's server ([`supabase/functions/modanzer-report`](supabase/functions/modanzer-report/index.ts)), which saves them in the PrimeTiers bot's MongoDB, in the `modanzer_reports` collection, under a random reference code. Nothing is posted until staff look the code up with `/ssresult`.
++- The server keeps only the fields ModAnzer sends, and caps their sizes. It rate-limits each sender to 6 reports a minute and doesn't store IP addresses.
+ - Windows user folders are shown as `~` and user names as `<user>`. Minecraft account **names** are included, never tokens or emails.
+ 
+ Setup, in the **excusemecounter** Supabase project under **Edge Functions → Secrets**:
+@@ -111,7 +111,7 @@ Saved report document:
+ ```json
+ {
+   "tool": "ModAnzer", "mode": "Full Screenshare", "finished": "2026-11-21 09:30:00 +07:00",
+-  "discordId": "123456789012345678", "accounts": ["Steve"],
++  "refCode": "7k3qxf", "accounts": ["Steve"],
+   "mods": { "Folders": [], "Verified": 0, "CurseForgeApp": 0, "Unknown": 0, "Cheat": 0, "Cheats": [{ "Name": "", "Where": "", "Strings": "" }], "Unknowns": [{ "Name": "", "Where": "" }] },
+   "system":    { "Admin": true, "Alerts": [{ "Time": "09:20", "Level": "Red", "Text": "" }] },
+   "injection": { "Admin": true, "Uptime": "", "GameFolder": "", "Alerts": [] },
+@@ -172,11 +172,12 @@ Jars in one level of subfolders (for example `mods\1.21\`) are included too.
+ 
+ 1. Hashes every `.jar` with SHA1.
+ 2. Looks the hashes up on Modrinth in one batched request, then on Megabase and CurseForge for anything Modrinth doesn't know. Only hashes and fingerprints leave your PC, never files.
+-3. Opens each unrecognised jar in memory, including jars nested in `META-INF/jars`, and searches it for cheat module names.
++3. Checks the mods it recognised too, because cheats and PvP macros can be published on Modrinth. A recognised mod counts as **[CHEAT]** when its Modrinth slug or SHA1 is in [`flagged.txt`](flagged.txt), when its name says what it does (AutoTotem, Crystal Macro, TriggerBot, Aim Assist and so on), or when its jar has a class named like a cheat module (`AutoTotem.class`). Add a Modrinth macro to `flagged.txt` on GitHub to catch it without a new release.
++4. Opens each unrecognised jar in memory, including jars nested in `META-INF/jars`, and searches it for cheat module names.
+    - **Strong names** such as AutoCrystal, TriggerBot and KillAura count wherever they appear.
+    - **Generic names** (Velocity, Hitboxes, AimAssist, AutoArmor, FastPlace) are also ordinary game-code words, like `getVelocity` in physics mods, so they only count when they are a whole name on their own: a class called `Velocity.class` or `VelocityModule.class`, or the exact text `Velocity` stored as a separate string. That's how cheat module names look.
+-4. Prints the results grouped by launcher and instance: **[OK]** verified, **[CF]** installed by the CurseForge app with no cheat names inside, **[?]** unknown (with the download URL Windows recorded, if any), and **[CHEAT]** with the strings that matched and the file's SHA1.
+-5. Ends with a summary and a **Cheats found** list showing every cheat and which launcher and instance it was in.
++5. Prints the results grouped by launcher and instance: **[OK]** verified, **[CF]** installed by the CurseForge app with no cheat names inside, **[?]** unknown (with the download URL Windows recorded, if any), and **[CHEAT]** with the strings that matched and the file's SHA1.
++6. Ends with a summary and a **Cheats found** list showing every cheat and which launcher and instance it was in.
+ 
+ It is read-only: nothing is modified, uploaded, extracted to disk, or installed.
+ 
+diff --git a/exe/MainForm.cs b/exe/MainForm.cs
+index 5e65f1d..5c7a2f5 100644
+--- a/exe/MainForm.cs
++++ b/exe/MainForm.cs
+@@ -54,7 +54,7 @@ namespace ModAnzer
+         private readonly BevelPanel _sendBar = new BevelPanel();
+         private readonly PixelLabel _sendTitle = new PixelLabel();
+         private readonly Label _sendHint = new Label();
+-        private readonly TextBox _discordId = new TextBox();
++        private readonly TextBox _code = new TextBox(); // the reference code, selectable so it can be copied
+         private readonly PixelButton _send = new PixelButton();
+ 
+         private readonly Icon _appIcon;
+@@ -152,19 +152,19 @@ namespace ModAnzer
+ 
+             // send bar
+             _sendTitle.Text = "Send to staff"; _sendTitle.Font = Theme.Pixel(16); _sendTitle.ForeColor = Theme.Text;
+-            _sendHint.Text = "Discord ID: turn on Developer Mode, right-click your name, Copy User ID.";
++            _sendHint.Text = HintBefore;
+             _sendHint.Font = Theme.Sans(12); _sendHint.ForeColor = Theme.Muted; _sendHint.BackColor = Theme.Panel;
+-            _discordId.BorderStyle = BorderStyle.FixedSingle; _discordId.BackColor = Theme.Bg2; _discordId.ForeColor = Theme.Text;
+-            _discordId.Font = Theme.Sans(16); _discordId.MaxLength = 20;
+-            _send.Text = "Send"; _send.Style = PixelButton.Kind.Purple; _send.Enabled = false;
++            _code.BorderStyle = BorderStyle.FixedSingle; _code.BackColor = Theme.Bg2; _code.ForeColor = Theme.Gold;
++            _code.Font = Theme.Mono(24); _code.ReadOnly = true; _code.TextAlign = HorizontalAlignment.Center; _code.TabStop = false;
++            _send.Text = "Get code"; _send.Style = PixelButton.Kind.Purple; _send.Enabled = false;
+             _send.Click += (s, e) => SendReport();
+-            _sendBar.Controls.AddRange(new Control[] { _sendTitle, _sendHint, _discordId, _send });
++            _sendBar.Controls.AddRange(new Control[] { _sendTitle, _sendHint, _code, _send });
+             Controls.Add(_sendBar);
+ 
+             _flush.Tick += (s, e) => Flush();
+             _flush.Start();
+             Resize += (s, e) => DoLayout();
+-            Shown += (s, e) => SetCueBanner(_discordId, "e.g. 123456789012345678");
++            Shown += (s, e) => SetCueBanner(_code, "code");
+ 
+             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+             SelectMode(_mode);
+@@ -208,10 +208,10 @@ namespace ModAnzer
+             int by = ClientSize.Height - pad - barH;
+             _sendBar.SetBounds(rx, by, rw, barH);
+             int ip = Theme.S(16);
+-            int sendW = Theme.S(110), idW = Theme.S(210), fieldH = Theme.S(44);
++            int sendW = Theme.S(140), idW = Theme.S(170), fieldH = Theme.S(44);
+             _send.SetBounds(rw - ip - sendW, (barH - fieldH) / 2, sendW, fieldH);
+-            _discordId.SetBounds(rw - ip - sendW - Theme.S(10) - idW, (barH - _discordId.Height) / 2, idW, _discordId.Height);
+-            int textW = Math.Max(Theme.S(120), _discordId.Left - ip - Theme.S(16));
++            _code.SetBounds(rw - ip - sendW - Theme.S(10) - idW, (barH - _code.Height) / 2, idW, _code.Height);
++            int textW = Math.Max(Theme.S(120), _code.Left - ip - Theme.S(16));
+             _sendTitle.SetBounds(ip, Theme.S(14), textW, Theme.S(24));
+             _sendHint.SetBounds(ip, Theme.S(42), textW, barH - Theme.S(50));
+ 
+@@ -294,9 +294,10 @@ namespace ModAnzer
+             foreach (var b in _modeButtons) b.Enabled = false;
+             foreach (var b in _launcherButtons) b.Enabled = false;
+             _start.Enabled = false; _start.Text = "Scanning...";
+-            _send.Enabled = false; _send.Text = "Send";
++            _send.Enabled = false; _send.Text = "Get code";
++            _code.Text = "";
+             _sendHint.ForeColor = Theme.Muted;
+-            _sendHint.Text = "Discord ID: turn on Developer Mode, right-click your name, Copy User ID.";
++            _sendHint.Text = HintBefore;
+             bool live = _mode == "injection" || _mode == "full";
+             _stop.Visible = live; _stop.Enabled = live; _stop.Text = "Stop live watch";
+             _start.Visible = !live;
+@@ -325,8 +326,8 @@ namespace ModAnzer
+                 _reportFile = _runner.ReportFile;
+                 _send.Enabled = true;
+                 _sendHint.ForeColor = Theme.Text;
+-                _sendHint.Text = "Scan done. Enter your Discord ID and press Send.";
+-                _discordId.Focus();
++                _sendHint.Text = HintReady;
++                _send.Focus();
+             }
+             Invalidate();
+         }
+@@ -489,19 +490,15 @@ namespace ModAnzer
+             return m.Success ? m.Groups[1].Value : "";
+         }
+ 
++        private const string HintBefore = "When the scan ends, press Get code and give the code to staff.";
++        private const string HintReady = "Scan done. Press Get code to send the results and get a code for staff.";
++
+         private void SendReport()
+         {
+-            string id = _discordId.Text.Trim();
+-            if (!Regex.IsMatch(id, @"^\d{17,20}$"))
+-            {
+-                _sendHint.ForeColor = Theme.Loss;
+-                _sendHint.Text = "That is not a Discord ID. It is a long number: right-click your name, Copy User ID.";
+-                return;
+-            }
+             if (_reportFile == null || string.IsNullOrEmpty(_reportUrl)) return;
+             string report = File.ReadAllText(_reportFile, Encoding.UTF8).Trim();
+             if (!report.StartsWith("{") || report.Length < 3) return;
+-            string body = "{\"report\":{\"discordId\":\"" + id + "\"," + report.Substring(1) + "}";
++            string body = "{\"report\":" + report + "}";
+ 
+             _send.Enabled = false; _send.Text = "Sending";
+             _sendHint.ForeColor = Theme.Muted; _sendHint.Text = "Sending...";
+@@ -515,9 +512,11 @@ namespace ModAnzer
+                         wc.Encoding = Encoding.UTF8;
+                         wc.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8";
+                         wc.Headers[HttpRequestHeader.UserAgent] = "ModAnzer-App (github.com/napatc1/ModAnzer)";
+-                        wc.UploadString(url, "POST", body);
++                        string resp = wc.UploadString(url, "POST", body);
++                        var m = Regex.Match(resp, "\"code\"\\s*:\\s*\"([2-9a-z]{6})\"");
++                        if (!m.Success) return Tuple.Create((string)null, "the server sent no code");
++                        return Tuple.Create(m.Groups[1].Value, (string)null);
+                     }
+-                    return (string)null;
+                 }
+                 catch (WebException ex)
+                 {
+@@ -526,26 +525,28 @@ namespace ModAnzer
+                         using (var r = new StreamReader(ex.Response.GetResponseStream()))
+                         {
+                             var m = Regex.Match(r.ReadToEnd(), "\"error\"\\s*:\\s*\"([^\"]+)\"");
+-                            if (m.Success) return m.Groups[1].Value;
++                            if (m.Success) return Tuple.Create((string)null, m.Groups[1].Value);
+                         }
+                     }
+                     catch { }
+-                    return ex.Message;
++                    return Tuple.Create((string)null, ex.Message);
+                 }
+-                catch (Exception ex) { return ex.Message; }
++                catch (Exception ex) { return Tuple.Create((string)null, ex.Message); }
+             }).ContinueWith(t => BeginInvoke((Action)(() =>
+             {
+-                if (t.Result == null)
++                if (t.Result.Item1 != null)
+                 {
+                     _send.Text = "Sent";
++                    _code.Text = t.Result.Item1;
++                    try { Clipboard.SetText(t.Result.Item1); } catch { }
+                     _sendHint.ForeColor = Theme.Win;
+-                    _sendHint.Text = "Sent. Staff will see it in #mod-check.";
++                    _sendHint.Text = "Give this code to staff (it is copied). Only staff can see your results with it.";
+                 }
+                 else
+                 {
+                     _send.Enabled = true; _send.Text = "Retry";
+                     _sendHint.ForeColor = Theme.Loss;
+-                    _sendHint.Text = "Could not send: " + t.Result;
++                    _sendHint.Text = "Could not send: " + t.Result.Item2;
+                 }
+             })));
+         }
+@@ -603,7 +604,8 @@ namespace ModAnzer
+             _send.Enabled = true;
+             _start.Text = "Scan again";
+             _sendHint.ForeColor = Theme.Text;
+-            _sendHint.Text = "Scan done. Enter your Discord ID and press Send.";
++            _sendHint.Text = HintReady;
++            _code.Text = "7k3qxf";
+         }
+     }
+ }
+diff --git a/flagged.txt b/flagged.txt
+new file mode 100644
+index 0000000..e8ed6ac
+--- /dev/null
++++ b/flagged.txt
+@@ -0,0 +1,10 @@
++# ModAnzer flagged mods
++# Mods listed here count as [CHEAT] even when they are published on Modrinth, Megabase or
++# CurseForge, for example PvP macros. One per line, either:
++#   <modrinth-slug>  <why>     the slug is the last part of the Modrinth page link,
++#                              e.g. modrinth.com/mod/some-macro -> some-macro
++#   <sha1>  <why>              one exact file (the sha1 is printed under every result)
++# ModAnzer also flags known mods whose name says what they do (AutoTotem, Crystal Macro,
++# TriggerBot...) and jars with classes named like cheat modules, without being listed here.
++# Lines starting with # are ignored.
++
+diff --git a/site/index.html b/site/index.html
+index 1643577..dda8e13 100644
+--- a/site/index.html
++++ b/site/index.html
+@@ -113,7 +113,7 @@
+   </header>
+ 
+   <div class="notice">
+-    <strong>Not a hacking or malware tool.</strong> It only reads, and it's open source. It checks mods, the running game and Windows' records, then shows the results on screen. At the end it asks for your Discord ID, and only if you press Enter is a summary of the results sent to PrimeTiers staff.
++    <strong>Not a hacking or malware tool.</strong> It only reads, and it's open source. It checks mods, the running game and Windows' records, then shows the results on screen. At the end, only if you press Enter (or Get code in the app) is a summary of the results sent, and you get a short code to give PrimeTiers staff.
+   </div>
+ 
+   <div class="grid">
+@@ -132,7 +132,7 @@
+       <ol class="small">
+         <li>If your browser warns about the file, choose <b>Keep</b></li>
+         <li>Open <b>ModAnzer.exe</b>. If Windows says it protected your PC, click <b>More info &rarr; Run anyway</b></li>
+-        <li>Pick a check, press <b>Start scan</b>, then enter your Discord ID and press <b>Send</b></li>
++        <li>Pick a check, press <b>Start scan</b>, then press <b>Get code</b> and give the code to staff</li>
+       </ol>
+       <p class="small">No app? <a href="https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.bat">ModAnzer.bat</a> runs the same scan in a PowerShell window.</p>
+       <p class="small">Prefer the script itself? <a href="ModAnzer.ps1" download>Download ModAnzer.ps1</a>, right-click it &rarr; <b>Run with PowerShell</b>.</p>
+diff --git a/supabase/functions/modanzer-report/index.ts b/supabase/functions/modanzer-report/index.ts
+index 2331eef..7dffec5 100644
+--- a/supabase/functions/modanzer-report/index.ts
++++ b/supabase/functions/modanzer-report/index.ts
+@@ -1,7 +1,8 @@
+ // ModAnzer screenshare reports -> the PrimeTiers bot's MongoDB.
+-// The script sends {report}. This checks it, trims it and saves it to the
+-// `modanzer_reports` collection with status "new". The PrimeTiers Discord bot
+-// picks up new reports and posts them in its mod-check channel.
++// The app sends {report}. This checks it, trims it and saves it to the
++// `modanzer_reports` collection under a short reference code, which it sends
++// back for the player to give to staff. Staff run /ssresult with that code in
++// the PrimeTiers Discord bot to see the report.
+ // Secrets (set in this Supabase project):
+ //   MODANZER_MONGODB_URI  connection string. Use a database user that can only
+ //                         insert into modanzer_reports, not the bot's main login.
+@@ -40,7 +41,6 @@ export function sanitize(raw: unknown) {
+     tool: "ModAnzer",
+     mode: str(r.mode, 40),
+     finished: str(r.finished, 40),
+-    discordId: typeof r.discordId === "string" && /^\d{17,20}$/.test(r.discordId) ? r.discordId : "",
+     accounts: arr(r.accounts, 20).map((a) => str(a, 16)).filter(Boolean),
+     mods: m && {
+       Folders: arr(m.Folders, 50).map((f) => str(f, 120)),
+@@ -59,6 +59,17 @@ export function sanitize(raw: unknown) {
+   };
+ }
+ 
++// 6 characters from 31 letters and digits (no 0/o, 1/l/i), about 887 million codes.
++const CODE_CHARS = "23456789abcdefghjkmnpqrstuvwxyz";
++function newCode(): string {
++  const bytes = crypto.getRandomValues(new Uint8Array(6));
++  // 248 is the largest multiple of 31 below 256; redraw bytes above it so every character is equally likely.
++  return Array.from(bytes, (b) => {
++    while (b >= 248) b = crypto.getRandomValues(new Uint8Array(1))[0];
++    return CODE_CHARS[b % 31];
++  }).join("");
++}
++
+ async function shortHash(text: string): Promise<string> {
+   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+   return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
+@@ -95,15 +106,19 @@ Deno.serve(async (req: Request) => {
+       client = new MongoClient(uri, { maxPoolSize: 2, serverSelectionTimeoutMS: 8000 });
+       await client.connect();
+     }
+-    const doc = {
+-      ...report,
+-      status: "new",
+-      receivedAt: new Date(),
+-      // groups reports from the same sender without storing the IP address
+-      senderHash: await shortHash(ip + uri),
+-    };
+-    const res = await client.db(Deno.env.get("MODANZER_MONGODB_DB") ?? "primetiers").collection("modanzer_reports").insertOne(doc);
+-    return json({ ok: true, id: String(res.insertedId) });
++    const col = client.db(Deno.env.get("MODANZER_MONGODB_DB") ?? "primetiers").collection("modanzer_reports");
++    const senderHash = await shortHash(ip + uri); // groups reports from one sender without storing the IP
++    // The bot keeps a unique index on refCode; on the rare clash, draw a new code.
++    for (let attempt = 0; attempt < 5; attempt++) {
++      const refCode = newCode();
++      try {
++        await col.insertOne({ ...report, refCode, status: "new", receivedAt: new Date(), senderHash });
++        return json({ ok: true, code: refCode });
++      } catch (err) {
++        if ((err as { code?: number })?.code !== 11000) throw err;
++      }
++    }
++    return json({ error: "the report server could not make a code - try again" }, 502);
+   } catch (err) {
+     client = null;
+     console.error("insert failed:", err instanceof Error ? err.message : err);
+-- 
+2.43.0
+
+
+From a8c9f088b7c5f08264976329ebd92402ce962eaf Mon Sep 17 00:00:00 2001
+From: napatc1 <napatchoomchaiyot@gmail.com>
+Date: Sat, 21 Nov 2026 15:03:39 +0000
+Subject: [PATCH 2/3] Report server: still accept a Discord ID from older
+ ModAnzer versions
+
+---
+ supabase/functions/modanzer-report/index.ts | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/supabase/functions/modanzer-report/index.ts b/supabase/functions/modanzer-report/index.ts
+index 7dffec5..c8e3d21 100644
+--- a/supabase/functions/modanzer-report/index.ts
++++ b/supabase/functions/modanzer-report/index.ts
+@@ -41,6 +41,8 @@ export function sanitize(raw: unknown) {
+     tool: "ModAnzer",
+     mode: str(r.mode, 40),
+     finished: str(r.finished, 40),
++    // Only older ModAnzer versions send this; new ones use the reference code instead.
++    discordId: typeof r.discordId === "string" && /^\d{17,20}$/.test(r.discordId) ? r.discordId : "",
+     accounts: arr(r.accounts, 20).map((a) => str(a, 16)).filter(Boolean),
+     mods: m && {
+       Folders: arr(m.Folders, 50).map((f) => str(f, 120)),
+-- 
+2.43.0
+
+
+From e13af4471d9b68ad52404b1ef2595eb2931f4cb7 Mon Sep 17 00:00:00 2001
+From: napatc1 <napatchoomchaiyot@gmail.com>
+Date: Sat, 21 Nov 2026 15:10:36 +0000
+Subject: [PATCH 3/3] Let the release build be started by hand or by another
+ workflow
+
+---
+ .github/workflows/android.yml | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/.github/workflows/android.yml b/.github/workflows/android.yml
+index 826df06..0db54a2 100644
+--- a/.github/workflows/android.yml
++++ b/.github/workflows/android.yml
+@@ -1,6 +1,9 @@
+ name: Build release
+ 
+ on:
++  # Also started by the "Apply patches" workflow after it pushes, because a push made
++  # by a workflow doesn't start other workflows on its own.
++  workflow_dispatch:
+   push:
+     branches: [main]
+     paths:
+-- 
+2.43.0
+
