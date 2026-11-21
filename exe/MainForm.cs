@@ -128,7 +128,7 @@ namespace ModAnzer
             _sendHint.Text = "Discord ID: turn on Developer Mode, right-click your name, Copy User ID.";
             _sendHint.Font = Theme.Sans(12); _sendHint.ForeColor = Theme.Muted; _sendHint.BackColor = Theme.Panel;
             _discordId.BorderStyle = BorderStyle.FixedSingle; _discordId.BackColor = Theme.Bg2; _discordId.ForeColor = Theme.Text;
-            _discordId.Font = Theme.Sans(18); _discordId.MaxLength = 20;
+            _discordId.Font = Theme.Sans(16); _discordId.MaxLength = 20;
             _send.Text = "Send"; _send.Style = PixelButton.Kind.Purple; _send.Enabled = false;
             _send.Click += (s, e) => SendReport();
             _sendBar.Controls.AddRange(new Control[] { _sendTitle, _sendHint, _discordId, _send });
@@ -195,12 +195,11 @@ namespace ModAnzer
             g.DrawImage(_logo, pad, (header - _logo.Height) / 2);
             float wx = pad + _logo.Width + Theme.S(12);
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
-            var sf = StringFormat.GenericTypographic;
-            float modW = g.MeasureString("Mod", _wordmark, PointF.Empty, sf).Width;
-            float anzW = g.MeasureString("Anzer", _wordmark, PointF.Empty, sf).Width;
-            Theme.DrawText(g, "Mod", _wordmark, Theme.Text, new RectangleF(wx, 0, modW + Theme.S(8), header));
-            Theme.DrawText(g, "Anzer", _wordmark, Theme.Purple, new RectangleF(wx + modW, 0, anzW + Theme.S(8), header));
-            Theme.DrawText(g, "for PrimeTiers screenshares", _tagline, Theme.Dim, new RectangleF(wx + modW + anzW + Theme.S(18), 0, Theme.S(260), header));
+            float modW = g.MeasureString("Mod", _wordmark).Width - Theme.S(6);
+            float anzW = g.MeasureString("Anzer", _wordmark).Width;
+            Theme.DrawText(g, "Mod", _wordmark, Theme.Text, new RectangleF(wx, 0, Theme.S(400), header), StringAlignment.Near, StringAlignment.Center, false);
+            Theme.DrawText(g, "Anzer", _wordmark, Theme.Purple, new RectangleF(wx + modW, 0, Theme.S(400), header), StringAlignment.Near, StringAlignment.Center, false);
+            Theme.DrawText(g, "for PrimeTiers screenshares", _tagline, Theme.Dim, new RectangleF(wx + modW + anzW + Theme.S(10), 0, Theme.S(260), header));
             if (_running)
             {
                 Theme.DrawText(g, "Scanning...", _tagline, Theme.Gold, new RectangleF(0, 0, _admin.Left - Theme.S(16), header), StringAlignment.Far);
