@@ -65,7 +65,7 @@ namespace ModAnzer
             using (var s = typeof(MainForm).Assembly.GetManifestResourceStream("ModAnzer.ico")) _appIcon = new Icon(s);
             Icon = _appIcon;
             _logo = new Icon(_appIcon, Theme.S(32), Theme.S(32)).ToBitmap();
-            _wordmark = Theme.Pixel(24);
+            _wordmark = Theme.Pixel(22);
             _tagline = Theme.Sans(13);
             BackColor = Theme.Bg;
             ForeColor = Theme.Text;
@@ -80,8 +80,8 @@ namespace ModAnzer
             if (!string.IsNullOrEmpty(initialMode)) _mode = initialMode;
 
             // left column
-            _titleA.Text = "Get scanned."; _titleA.Font = Theme.Pixel(40); _titleA.ForeColor = Theme.Text;
-            _titleB.Text = "Stay clean."; _titleB.Font = Theme.Pixel(40); _titleB.ForeColor = Theme.Gold;
+            _titleA.Text = "Get scanned."; _titleA.Font = Theme.Pixel(32); _titleA.ForeColor = Theme.Text;
+            _titleB.Text = "Stay clean."; _titleB.Font = Theme.Pixel(32); _titleB.ForeColor = Theme.Gold;
             _blurb.Text = "Pick a check. ModAnzer only reads: it never changes, deletes or installs anything, and nothing is sent unless you press Send.";
             _blurb.Font = Theme.Sans(15); _blurb.ForeColor = Theme.Muted; _blurb.BackColor = Color.Transparent;
             Controls.AddRange(new Control[] { _titleA, _titleB, _blurb });
@@ -115,17 +115,18 @@ namespace ModAnzer
             _out.BackColor = Theme.Bg2;
             _out.ForeColor = Theme.Text;
             _out.Font = Theme.Mono(15);
-            _out.WordWrap = false;
+            _out.WordWrap = true;
             _out.DetectUrls = false;
-            _out.ScrollBars = RichTextBoxScrollBars.Both;
+            _out.ScrollBars = RichTextBoxScrollBars.Vertical;
+            _out.HandleCreated += (s, e) => { try { SetWindowTheme(_out.Handle, "DarkMode_Explorer", null); } catch { } };
             _outPanel.BackColor = Theme.Bg2;
             _outPanel.Controls.Add(_out);
             Controls.Add(_outPanel);
 
             // send bar
-            _sendTitle.Text = "Send results to PrimeTiers staff"; _sendTitle.Font = Theme.Pixel(16); _sendTitle.ForeColor = Theme.Text;
-            _sendHint.Text = "Your Discord ID: Settings > Advanced > Developer Mode, then right-click your name > Copy User ID.";
-            _sendHint.Font = Theme.Sans(13); _sendHint.ForeColor = Theme.Muted; _sendHint.BackColor = Theme.Panel;
+            _sendTitle.Text = "Send to staff"; _sendTitle.Font = Theme.Pixel(16); _sendTitle.ForeColor = Theme.Text;
+            _sendHint.Text = "Discord ID: turn on Developer Mode, right-click your name, Copy User ID.";
+            _sendHint.Font = Theme.Sans(12); _sendHint.ForeColor = Theme.Muted; _sendHint.BackColor = Theme.Panel;
             _discordId.BorderStyle = BorderStyle.FixedSingle; _discordId.BackColor = Theme.Bg2; _discordId.ForeColor = Theme.Text;
             _discordId.Font = Theme.Sans(18); _discordId.MaxLength = 20;
             _send.Text = "Send"; _send.Style = PixelButton.Kind.Purple; _send.Enabled = false;
@@ -165,16 +166,16 @@ namespace ModAnzer
             int bw = (rw - gap * (_stats.Length - 1)) / _stats.Length;
             for (int i = 0; i < _stats.Length; i++) _stats[i].SetBounds(rx + i * (bw + gap), sy, bw, sh);
 
-            int barH = Theme.S(96);
+            int barH = Theme.S(112);
             int by = ClientSize.Height - pad - barH;
             _sendBar.SetBounds(rx, by, rw, barH);
             int ip = Theme.S(16);
-            int sendW = Theme.S(130), idW = Theme.S(240), fieldH = Theme.S(44);
+            int sendW = Theme.S(110), idW = Theme.S(210), fieldH = Theme.S(44);
             _send.SetBounds(rw - ip - sendW, (barH - fieldH) / 2, sendW, fieldH);
             _discordId.SetBounds(rw - ip - sendW - Theme.S(10) - idW, (barH - _discordId.Height) / 2, idW, _discordId.Height);
             int textW = Math.Max(Theme.S(120), _discordId.Left - ip - Theme.S(16));
             _sendTitle.SetBounds(ip, Theme.S(14), textW, Theme.S(24));
-            _sendHint.SetBounds(ip, Theme.S(42), textW, barH - Theme.S(48));
+            _sendHint.SetBounds(ip, Theme.S(42), textW, barH - Theme.S(50));
 
             int oy = sy + sh + Theme.S(14);
             _outPanel.SetBounds(rx, oy, rw, by - Theme.S(14) - oy);
@@ -194,10 +195,12 @@ namespace ModAnzer
             g.DrawImage(_logo, pad, (header - _logo.Height) / 2);
             float wx = pad + _logo.Width + Theme.S(12);
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
-            var mod = g.MeasureString("Mod", _wordmark, PointF.Empty, StringFormat.GenericTypographic);
-            Theme.DrawText(g, "Mod", _wordmark, Theme.Text, new RectangleF(wx, 0, mod.Width + Theme.S(4), header));
-            Theme.DrawText(g, "Anzer", _wordmark, Theme.Purple, new RectangleF(wx + mod.Width + Theme.S(2), 0, Theme.S(200), header));
-            Theme.DrawText(g, "for PrimeTiers screenshares", _tagline, Theme.Dim, new RectangleF(wx + Theme.S(170), 0, Theme.S(320), header));
+            var sf = StringFormat.GenericTypographic;
+            float modW = g.MeasureString("Mod", _wordmark, PointF.Empty, sf).Width;
+            float anzW = g.MeasureString("Anzer", _wordmark, PointF.Empty, sf).Width;
+            Theme.DrawText(g, "Mod", _wordmark, Theme.Text, new RectangleF(wx, 0, modW + Theme.S(8), header));
+            Theme.DrawText(g, "Anzer", _wordmark, Theme.Purple, new RectangleF(wx + modW, 0, anzW + Theme.S(8), header));
+            Theme.DrawText(g, "for PrimeTiers screenshares", _tagline, Theme.Dim, new RectangleF(wx + modW + anzW + Theme.S(18), 0, Theme.S(260), header));
             if (_running)
             {
                 Theme.DrawText(g, "Scanning...", _tagline, Theme.Gold, new RectangleF(0, 0, _admin.Left - Theme.S(16), header), StringAlignment.Far);
@@ -218,12 +221,12 @@ namespace ModAnzer
             _running = true;
             _reportFile = null;
             _suspicious = 0;
-            foreach (var s in _stats) s.Set("-", Theme.Gold);
+            foreach (var s in _stats) s.Set("", Theme.Gold);
             foreach (var b in _modeButtons) b.Enabled = false;
             _start.Enabled = false; _start.Text = "Scanning...";
             _send.Enabled = false; _send.Text = "Send";
             _sendHint.ForeColor = Theme.Muted;
-            _sendHint.Text = "Your Discord ID: Settings > Advanced > Developer Mode, then right-click your name > Copy User ID.";
+            _sendHint.Text = "Discord ID: turn on Developer Mode, right-click your name, Copy User ID.";
             bool live = _mode == "injection" || _mode == "full";
             _stop.Visible = live; _stop.Enabled = live; _stop.Text = "Stop live watch";
             _out.Clear(); _line.Clear(); _lineStart = 0;
@@ -247,7 +250,7 @@ namespace ModAnzer
                 _reportFile = _runner.ReportFile;
                 _send.Enabled = true;
                 _sendHint.ForeColor = Theme.Text;
-                _sendHint.Text = "Scan finished. Enter your Discord ID and press Send to share the results with PrimeTiers staff.";
+                _sendHint.Text = "Scan done. Enter your Discord ID and press Send.";
                 _discordId.Focus();
             }
             Invalidate();
@@ -288,6 +291,14 @@ namespace ModAnzer
                 }
                 string part = parts[i];
                 if (part.Length == 0) continue;
+                if (_line.Length > 0 && _line.ToString().Trim().Length == 0)
+                {
+                    // the script "clears" a progress line by printing spaces; drop them
+                    _out.Select(_lineStart, _out.TextLength - _lineStart);
+                    _out.SelectedText = "";
+                    _line.Clear();
+                }
+                if (part.Trim().Length == 0 && _line.Length == 0 && i < parts.Length - 1) continue;
                 _out.SelectionStart = _out.TextLength;
                 _out.SelectionLength = 0;
                 _out.SelectionColor = Map(color);
@@ -339,9 +350,9 @@ namespace ModAnzer
             if ((m = RxVerified.Match(line)).Success) _stats[0].Set(m.Groups[1].Value, Theme.Win);
             else if ((m = RxUnknown.Match(line)).Success) _stats[1].Set(m.Groups[1].Value, Theme.Gold);
             else if ((m = RxCheck.Match(line)).Success) _stats[2].Set(m.Groups[1].Value, Theme.Gold);
-            else if ((m = RxCheat.Match(line)).Success) { int v = int.Parse(m.Groups[1].Value); _stats[3].Set(v.ToString(), v > 0 ? Theme.Loss : Theme.Win); if (_stats[2].Value == "-") _stats[2].Set("0", Theme.Win); }
+            else if ((m = RxCheat.Match(line)).Success) { int v = int.Parse(m.Groups[1].Value); _stats[3].Set(v.ToString(), v > 0 ? Theme.Loss : Theme.Win); if (_stats[2].Value == "") _stats[2].Set("0", Theme.Win); }
             else if ((m = RxSusp.Match(line)).Success) { _suspicious += int.Parse(m.Groups[1].Value); _stats[4].Set(_suspicious.ToString(), _suspicious > 0 ? Theme.Loss : Theme.Win); }
-            else if (line.Trim() == "Nothing suspicious found." && _stats[4].Value == "-") _stats[4].Set("0", Theme.Win);
+            else if (line.Trim() == "Nothing suspicious found." && _stats[4].Value == "") _stats[4].Set("0", Theme.Win);
         }
 
         private void ShowNotice()
@@ -400,7 +411,7 @@ namespace ModAnzer
             if (!Regex.IsMatch(id, @"^\d{17,20}$"))
             {
                 _sendHint.ForeColor = Theme.Loss;
-                _sendHint.Text = "A Discord ID is a long number, like 123456789012345678. Settings > Advanced > Developer Mode, then right-click your name > Copy User ID.";
+                _sendHint.Text = "That is not a Discord ID. It is a long number: right-click your name, Copy User ID.";
                 return;
             }
             if (_reportFile == null || string.IsNullOrEmpty(_reportUrl)) return;
@@ -444,13 +455,13 @@ namespace ModAnzer
                 {
                     _send.Text = "Sent";
                     _sendHint.ForeColor = Theme.Win;
-                    _sendHint.Text = "Sent. PrimeTiers staff will see the results in their mod-check channel.";
+                    _sendHint.Text = "Sent. Staff will see it in #mod-check.";
                 }
                 else
                 {
                     _send.Enabled = true; _send.Text = "Retry";
                     _sendHint.ForeColor = Theme.Loss;
-                    _sendHint.Text = "Could not send: " + t.Result + ". Take a screenshot of this window for staff instead.";
+                    _sendHint.Text = "Could not send: " + t.Result;
                 }
             })));
         }
@@ -468,6 +479,9 @@ namespace ModAnzer
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+
+        [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr hWnd, string app, string idList);
 
         private static void SetCueBanner(TextBox box, string text)
         {
@@ -505,7 +519,7 @@ namespace ModAnzer
             _send.Enabled = true;
             _start.Text = "Scan again";
             _sendHint.ForeColor = Theme.Text;
-            _sendHint.Text = "Scan finished. Enter your Discord ID and press Send to share the results with PrimeTiers staff.";
+            _sendHint.Text = "Scan done. Enter your Discord ID and press Send.";
         }
     }
 }

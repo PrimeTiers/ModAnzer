@@ -111,7 +111,7 @@ namespace ModAnzer
         public static void DrawText(Graphics g, string text, Font font, Color color, RectangleF r, StringAlignment h = StringAlignment.Near, StringAlignment v = StringAlignment.Center)
         {
             g.TextRenderingHint = font.FontFamily.Name.StartsWith("Silkscreen") ? TextRenderingHint.SingleBitPerPixelGridFit : TextRenderingHint.ClearTypeGridFit;
-            using (var sf = new StringFormat { Alignment = h, LineAlignment = v, Trimming = StringTrimming.EllipsisCharacter })
+            using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Alignment = h, LineAlignment = v, Trimming = StringTrimming.EllipsisCharacter })
             using (var br = new SolidBrush(color))
                 g.DrawString(text, font, br, r, sf);
         }
@@ -191,7 +191,7 @@ namespace ModAnzer
     internal class StatBox : Control
     {
         public string Label = "";
-        public string Value = "-";
+        public string Value = "";
         public Color ValueColor = Theme.Gold;
         private readonly Font _labelFont = Theme.Sans(13);
         private readonly Font _valueFont = Theme.Pixel(24);
