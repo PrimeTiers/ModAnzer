@@ -41,6 +41,8 @@ export function sanitize(raw: unknown) {
     tool: "ModAnzer",
     mode: str(r.mode, 40),
     finished: str(r.finished, 40),
+    // Only older ModAnzer versions send this; new ones use the reference code instead.
+    discordId: typeof r.discordId === "string" && /^\d{17,20}$/.test(r.discordId) ? r.discordId : "",
     accounts: arr(r.accounts, 20).map((a) => str(a, 16)).filter(Boolean),
     mods: m && {
       Folders: arr(m.Folders, 50).map((f) => str(f, 120)),
