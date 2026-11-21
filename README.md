@@ -11,7 +11,7 @@ Based on [HabibiModAnalyzer](https://github.com/HadronCollision/PowershellScript
 Shortest way to run it:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -Command "irm https://modanzer.onrender.com/ModAnzer.txt | iex"
+powershell -ExecutionPolicy Bypass -NoProfile -Command "iex ((irm https://modanzer.onrender.com/ModAnzer.txt) -join [char]10)"
 ```
 
 ## Run it

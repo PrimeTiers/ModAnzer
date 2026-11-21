@@ -123,7 +123,7 @@
 
       <div class="label">Paste into PowerShell</div>
       <div class="cmd">
-        <code id="oneliner">powershell -ExecutionPolicy Bypass -NoProfile -Command "irm https://modanzer.onrender.com/ModAnzer.txt | iex"</code>
+        <code id="oneliner">powershell -ExecutionPolicy Bypass -NoProfile -Command "iex ((irm https://modanzer.onrender.com/ModAnzer.txt) -join [char]10)"</code>
         <button type="button" data-copy="oneliner">Copy</button>
       </div>
 

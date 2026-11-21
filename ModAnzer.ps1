@@ -1183,7 +1183,7 @@ if ($Mode -ne 'mods' -and $IsWindowsOS -and -not (Test-Admin)) {
         if ($PSCommandPath) {
             $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $extra"
         } else {
-            $argLine = "-NoProfile -ExecutionPolicy Bypass -Command `"& ([scriptblock]::Create((Invoke-RestMethod 'https://modanzer.onrender.com/ModAnzer.txt'))) $extra`""
+            $argLine = "-NoProfile -ExecutionPolicy Bypass -Command `"& ([scriptblock]::Create(((Invoke-RestMethod 'https://modanzer.onrender.com/ModAnzer.txt') -join [char]10))) $extra`""
         }
         try {
             Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argLine -ErrorAction Stop
