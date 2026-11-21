@@ -1,0 +1,49 @@
+name: Apply patches
+
+# Upload a .patch file to the repo on GitHub (Add file > Upload files, at the top level
+# or in patches/), and this applies it to main, removes it, and starts the release build.
+# Works from a phone: no PC or git needed.
+
+on:
+  push:
+    branches: [main]
+    paths: ['*.patch', 'patches/*.patch']
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency: apply-patches
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply each patch, oldest name first
+        run: |
+          git config user.name napatc1
+          git config user.email napatchoomchaiyot@gmail.com
+          shopt -s nullglob
+          files=(*.patch patches/*.patch)
+          if [ ${#files[@]} -eq 0 ]; then echo "No patches."; exit 0; fi
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            if ! git am --committer-date-is-author-date "$f"; then
+              git am --abort || true
+              echo "::error::$f does not apply to main. Nothing was changed. Delete it and ask for a new patch."
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+          git rm -q "${files[@]}"
+          git commit -q -m "Remove applied patches"
+          git push origin HEAD:main
+
+      - name: Start the release build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run android.yml --ref main
