@@ -30,6 +30,13 @@ jobs:
           $p = Start-Process exe-out/ModAnzer.exe -ArgumentList '--screenshot', "$PWD\preview.png" -PassThru
           if (-not $p.WaitForExit(60000)) { $p.Kill(); throw 'screenshot timed out' }
           if (-not (Test-Path preview.png)) { throw 'no screenshot' }
+          $p = Start-Process exe-out/ModAnzer.exe -ArgumentList '--screenshot', "$PWD\scan.png", '--scan', 'system' -PassThru
+          if (-not $p.WaitForExit(600000)) { $p.Kill(); throw 'scan timed out' }
+          Get-Content scan.png.txt | Select-Object -Last 60
+          foreach ($f in 'preview.png', 'scan.png') {
+            $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\$f"))
+            Write-Output "PNG-BEGIN $f"; for ($i = 0; $i -lt $b.Length; $i += 4000) { Write-Output ('PNG ' + $b.Substring($i, [Math]::Min(4000, $b.Length - $i))) }; Write-Output "PNG-END $f"
+          }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -37,6 +44,7 @@ jobs:
           path: |
             exe-out/ModAnzer.exe
             preview.png
+            scan.png
 
   build:
     needs: exe

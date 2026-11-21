@@ -474,6 +474,10 @@ namespace ModAnzer
             SendMessage(box.Handle, 0x1501, new IntPtr(1), text); // EM_SETCUEBANNER
         }
 
+        internal bool IsScanning { get { return _running; } }
+        internal string OutputText { get { return _out.Text; } }
+        internal void StartScanFor(string mode) { SelectMode(mode); StartScan(); }
+
         /// <summary>Fills the window with sample results (for the build's preview screenshot).</summary>
         internal void LoadDemo()
         {
