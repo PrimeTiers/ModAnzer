@@ -1520,6 +1520,7 @@ function Invoke-ModAnalyzer {
     $cheatList = New-Object 'System.Collections.Generic.List[object]'
     $unknownList = New-Object 'System.Collections.Generic.List[object]'
     $checkList = New-Object 'System.Collections.Generic.List[object]'
+    $allList = New-Object 'System.Collections.Generic.List[object]'
 
     # "Launcher > instance" for a mods folder, e.g. "Modrinth > Atzlk_s PMW"
     function Get-InstanceLabel([string]$modsFolder) {
@@ -1542,8 +1543,10 @@ function Invoke-ModAnalyzer {
 
         foreach ($j in $here) {
             $name = $j.File.Name
+            $where = Get-InstanceLabel $f
             if ($j.Hash -and $known.ContainsKey($j.Hash)) {
                 $totalVerified++
+                $allList.Add([ordered]@{ Status = 'OK'; Name = $name; Title = [string]$known[$j.Hash]; Where = $where })
                 Write-Host ('  [OK]    {0,-32}' -f $known[$j.Hash]) -ForegroundColor Green -NoNewline
                 Write-Host $name -ForegroundColor DarkGray
                 continue
@@ -1556,12 +1559,14 @@ function Invoke-ModAnalyzer {
             if ($client) {
                 # Legit client file; only common words like "Velocity" matched.
                 $totalVerified++
+                $allList.Add([ordered]@{ Status = 'OK'; Name = $name; Title = $client; Where = $where })
                 Write-Host ('  [OK]    {0,-32}' -f $client) -ForegroundColor Green -NoNewline
                 Write-Host $name -ForegroundColor DarkGray
             } elseif ($hits -and $hits.Count -gt 0 -and -not $strongHit) {
                 # Only common words (Velocity, Hitboxes...) - a lead, not proof.
                 $totalCheck++
                 $allStrings = @($hits | ForEach-Object { $_.Strings } | Select-Object -Unique)
+                $allList.Add([ordered]@{ Status = 'CHECK'; Name = $name; Title = "common words: $($allStrings -join ', ')"; Where = $where })
                 Write-Host "  [CHECK] $name" -ForegroundColor Yellow
                 Write-Host "          common words only: " -ForegroundColor Gray -NoNewline
                 Write-Host ($allStrings -join ', ') -ForegroundColor DarkYellow
@@ -1569,6 +1574,7 @@ function Invoke-ModAnalyzer {
                 $checkList.Add([PSCustomObject]@{ Name = $name; Where = (Get-InstanceLabel $f); Strings = ($allStrings -join ', ') })
             } elseif ($hits -and $hits.Count -gt 0) {
                 $totalCheat++
+                $allList.Add([ordered]@{ Status = 'CHEAT'; Name = $name; Title = (@($hits | ForEach-Object { $_.Strings } | Select-Object -Unique) -join ', '); Where = $where })
                 Write-Host "  [CHEAT] $name" -ForegroundColor Red
                 foreach ($hit in $hits) {
                     Write-Host "          $($hit.Where): " -ForegroundColor Gray -NoNewline
@@ -1580,10 +1586,12 @@ function Invoke-ModAnalyzer {
             } elseif ($cfRecords.ContainsKey($name) -and (-not $cfRecords[$name].Length -or [int64]$cfRecords[$name].Length -eq $j.File.Length)) {
                 # Installed by the CurseForge app and no cheat names inside.
                 $totalCf++
+                $allList.Add([ordered]@{ Status = 'CF'; Name = $name; Title = [string]$cfRecords[$name].Name; Where = $where })
                 Write-Host ('  [CF]    {0,-32}' -f $cfRecords[$name].Name) -ForegroundColor Cyan -NoNewline
                 Write-Host $name -ForegroundColor DarkGray
             } else {
                 $totalUnknown++
+                $allList.Add([ordered]@{ Status = 'UNKNOWN'; Name = $name; Title = ''; Where = $where })
                 $unknownList.Add([PSCustomObject]@{ Name = $name; Where = (Get-InstanceLabel $f) })
                 Write-Host "  [?]     $name" -ForegroundColor DarkYellow
                 $zone = Get-ZoneIdentifier $j.File.FullName
@@ -1631,6 +1639,7 @@ function Invoke-ModAnalyzer {
         Folders  = @($withJars | ForEach-Object { Get-InstanceLabel $_ })
         Verified = $totalVerified; CurseForgeApp = $totalCf; Unknown = ($totalUnknown + $totalCheck); Cheat = $totalCheat
         Cheats   = @($cheatList | ForEach-Object { [ordered]@{ Name = $_.Name; Where = $_.Where; Strings = $_.Strings } })
+        All      = $allList.ToArray()
         Unknowns = @(@($checkList | ForEach-Object { [ordered]@{ Name = "$($_.Name) (CHECK - common words: $($_.Strings))"; Where = $_.Where } }) +
                      @($unknownList | ForEach-Object { [ordered]@{ Name = $_.Name; Where = $_.Where } }))
     }
