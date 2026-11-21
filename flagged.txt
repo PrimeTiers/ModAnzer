@@ -1,0 +1,10 @@
+# ModAnzer flagged mods
+# Mods listed here count as [CHEAT] even when they are published on Modrinth, Megabase or
+# CurseForge, for example PvP macros. One per line, either:
+#   <modrinth-slug>  <why>     the slug is the last part of the Modrinth page link,
+#                              e.g. modrinth.com/mod/some-macro -> some-macro
+#   <sha1>  <why>              one exact file (the sha1 is printed under every result)
+# ModAnzer also flags known mods whose name says what they do (AutoTotem, Crystal Macro,
+# TriggerBot...) and jars with classes named like cheat modules, without being listed here.
+# Lines starting with # are ignored.
+

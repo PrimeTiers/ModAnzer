@@ -16,7 +16,7 @@ powershell -ExecutionPolicy Bypass -NoProfile -Command "iex ((irm https://modanz
 
 ## Run it
 
-**Easiest:** download **[ModAnzer.exe](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.exe)** and open it. It is a small Windows app in PrimeTiers colours: pick a check, press **Start scan**, then enter your Discord ID and press **Send**. It runs the same `ModAnzer.ps1` (built into the exe) with Windows PowerShell 5.1 and needs .NET Framework 4.8, which Windows 10 and 11 already have. The source is in [`exe/`](exe). If Windows SmartScreen appears, click **More info → Run anyway**.
+**Easiest:** download **[ModAnzer.exe](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.exe)** and open it. It is a small Windows app in PrimeTiers colours: pick a check, press **Start scan**, then press **Get code** and give the code to staff. It runs the same `ModAnzer.ps1` (built into the exe) with Windows PowerShell 5.1 and needs .NET Framework 4.8, which Windows 10 and 11 already have. The source is in [`exe/`](exe). If Windows SmartScreen appears, click **More info → Run anyway**.
 
 **Or:** download **[ModAnzer.bat](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.bat)** and double-click it. It runs the `ModAnzer.ps1` next to it if there is one, and otherwise downloads the latest version from the website. If Windows SmartScreen appears, click **More info → Run anyway**.
 
@@ -93,10 +93,10 @@ Everything is a lead, not proof. Check each one with the player.
 
 ### Sending results to staff
 
-When the scan ends, ModAnzer asks **"What is your Discord ID"**, then shows **"Press Enter to send data"**. Pressing Enter sends a summary of the results to PrimeTiers staff; closing the window instead sends nothing. Use `-NoSend` to skip this, or `-NoPause -DiscordId <id>` to send without asking.
+When the scan ends, ModAnzer shows **"Press Enter to send and get your code"** (in the app: the **Get code** button). Sending saves the results on ModAnzer's server and shows a 6-character code, like `7k3qxf`. The player gives the code to staff, and staff run `/ssresult refcode:7k3qxf user:@player` in the PrimeTiers bot to see the report. Closing the window instead sends nothing. Use `-NoSend` to skip this, or `-NoPause` to send without asking.
 
-- Reports go to ModAnzer's server ([`supabase/functions/modanzer-report`](supabase/functions/modanzer-report/index.ts)), which saves them in the PrimeTiers bot's MongoDB, in the `modanzer_reports` collection with `status: "new"`. The PrimeTiers bot picks up new reports and posts them in `#mod-check`.
-- The server keeps only the fields ModAnzer sends, caps their sizes, and accepts only a real Discord ID (17–20 digits). It rate-limits each sender to 6 reports a minute and doesn't store IP addresses.
+- Reports go to ModAnzer's server ([`supabase/functions/modanzer-report`](supabase/functions/modanzer-report/index.ts)), which saves them in the PrimeTiers bot's MongoDB, in the `modanzer_reports` collection, under a random reference code. Nothing is posted until staff look the code up with `/ssresult`.
+- The server keeps only the fields ModAnzer sends, and caps their sizes. It rate-limits each sender to 6 reports a minute and doesn't store IP addresses.
 - Windows user folders are shown as `~` and user names as `<user>`. Minecraft account **names** are included, never tokens or emails.
 
 Setup, in the **excusemecounter** Supabase project under **Edge Functions → Secrets**:
@@ -111,7 +111,7 @@ Saved report document:
 ```json
 {
   "tool": "ModAnzer", "mode": "Full Screenshare", "finished": "2026-11-21 09:30:00 +07:00",
-  "discordId": "123456789012345678", "accounts": ["Steve"],
+  "refCode": "7k3qxf", "accounts": ["Steve"],
   "mods": { "Folders": [], "Verified": 0, "CurseForgeApp": 0, "Unknown": 0, "Cheat": 0, "Cheats": [{ "Name": "", "Where": "", "Strings": "" }], "Unknowns": [{ "Name": "", "Where": "" }] },
   "system":    { "Admin": true, "Alerts": [{ "Time": "09:20", "Level": "Red", "Text": "" }] },
   "injection": { "Admin": true, "Uptime": "", "GameFolder": "", "Alerts": [] },
@@ -172,11 +172,12 @@ Jars in one level of subfolders (for example `mods\1.21\`) are included too.
 
 1. Hashes every `.jar` with SHA1.
 2. Looks the hashes up on Modrinth in one batched request, then on Megabase and CurseForge for anything Modrinth doesn't know. Only hashes and fingerprints leave your PC, never files.
-3. Opens each unrecognised jar in memory, including jars nested in `META-INF/jars`, and searches it for cheat module names.
+3. Checks the mods it recognised too, because cheats and PvP macros can be published on Modrinth. A recognised mod counts as **[CHEAT]** when its Modrinth slug or SHA1 is in [`flagged.txt`](flagged.txt), when its name says what it does (AutoTotem, Crystal Macro, TriggerBot, Aim Assist and so on), or when its jar has a class named like a cheat module (`AutoTotem.class`). Add a Modrinth macro to `flagged.txt` on GitHub to catch it without a new release.
+4. Opens each unrecognised jar in memory, including jars nested in `META-INF/jars`, and searches it for cheat module names.
    - **Strong names** such as AutoCrystal, TriggerBot and KillAura count wherever they appear.
    - **Generic names** (Velocity, Hitboxes, AimAssist, AutoArmor, FastPlace) are also ordinary game-code words, like `getVelocity` in physics mods, so they only count when they are a whole name on their own: a class called `Velocity.class` or `VelocityModule.class`, or the exact text `Velocity` stored as a separate string. That's how cheat module names look.
-4. Prints the results grouped by launcher and instance: **[OK]** verified, **[CF]** installed by the CurseForge app with no cheat names inside, **[?]** unknown (with the download URL Windows recorded, if any), and **[CHEAT]** with the strings that matched and the file's SHA1.
-5. Ends with a summary and a **Cheats found** list showing every cheat and which launcher and instance it was in.
+5. Prints the results grouped by launcher and instance: **[OK]** verified, **[CF]** installed by the CurseForge app with no cheat names inside, **[?]** unknown (with the download URL Windows recorded, if any), and **[CHEAT]** with the strings that matched and the file's SHA1.
+6. Ends with a summary and a **Cheats found** list showing every cheat and which launcher and instance it was in.
 
 It is read-only: nothing is modified, uploaded, extracted to disk, or installed.
 

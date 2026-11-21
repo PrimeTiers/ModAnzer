@@ -54,7 +54,7 @@ namespace ModAnzer
         private readonly BevelPanel _sendBar = new BevelPanel();
         private readonly PixelLabel _sendTitle = new PixelLabel();
         private readonly Label _sendHint = new Label();
-        private readonly TextBox _discordId = new TextBox();
+        private readonly TextBox _code = new TextBox(); // the reference code, selectable so it can be copied
         private readonly PixelButton _send = new PixelButton();
 
         private readonly Icon _appIcon;
@@ -152,19 +152,19 @@ namespace ModAnzer
 
             // send bar
             _sendTitle.Text = "Send to staff"; _sendTitle.Font = Theme.Pixel(16); _sendTitle.ForeColor = Theme.Text;
-            _sendHint.Text = "Discord ID: turn on Developer Mode, right-click your name, Copy User ID.";
+            _sendHint.Text = HintBefore;
             _sendHint.Font = Theme.Sans(12); _sendHint.ForeColor = Theme.Muted; _sendHint.BackColor = Theme.Panel;
-            _discordId.BorderStyle = BorderStyle.FixedSingle; _discordId.BackColor = Theme.Bg2; _discordId.ForeColor = Theme.Text;
-            _discordId.Font = Theme.Sans(16); _discordId.MaxLength = 20;
-            _send.Text = "Send"; _send.Style = PixelButton.Kind.Purple; _send.Enabled = false;
+            _code.BorderStyle = BorderStyle.FixedSingle; _code.BackColor = Theme.Bg2; _code.ForeColor = Theme.Gold;
+            _code.Font = Theme.Mono(24); _code.ReadOnly = true; _code.TextAlign = HorizontalAlignment.Center; _code.TabStop = false;
+            _send.Text = "Get code"; _send.Style = PixelButton.Kind.Purple; _send.Enabled = false;
             _send.Click += (s, e) => SendReport();
-            _sendBar.Controls.AddRange(new Control[] { _sendTitle, _sendHint, _discordId, _send });
+            _sendBar.Controls.AddRange(new Control[] { _sendTitle, _sendHint, _code, _send });
             Controls.Add(_sendBar);
 
             _flush.Tick += (s, e) => Flush();
             _flush.Start();
             Resize += (s, e) => DoLayout();
-            Shown += (s, e) => SetCueBanner(_discordId, "e.g. 123456789012345678");
+            Shown += (s, e) => SetCueBanner(_code, "code");
 
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             SelectMode(_mode);
@@ -208,10 +208,10 @@ namespace ModAnzer
             int by = ClientSize.Height - pad - barH;
             _sendBar.SetBounds(rx, by, rw, barH);
             int ip = Theme.S(16);
-            int sendW = Theme.S(110), idW = Theme.S(210), fieldH = Theme.S(44);
+            int sendW = Theme.S(140), idW = Theme.S(170), fieldH = Theme.S(44);
             _send.SetBounds(rw - ip - sendW, (barH - fieldH) / 2, sendW, fieldH);
-            _discordId.SetBounds(rw - ip - sendW - Theme.S(10) - idW, (barH - _discordId.Height) / 2, idW, _discordId.Height);
-            int textW = Math.Max(Theme.S(120), _discordId.Left - ip - Theme.S(16));
+            _code.SetBounds(rw - ip - sendW - Theme.S(10) - idW, (barH - _code.Height) / 2, idW, _code.Height);
+            int textW = Math.Max(Theme.S(120), _code.Left - ip - Theme.S(16));
             _sendTitle.SetBounds(ip, Theme.S(14), textW, Theme.S(24));
             _sendHint.SetBounds(ip, Theme.S(42), textW, barH - Theme.S(50));
 
@@ -294,9 +294,10 @@ namespace ModAnzer
             foreach (var b in _modeButtons) b.Enabled = false;
             foreach (var b in _launcherButtons) b.Enabled = false;
             _start.Enabled = false; _start.Text = "Scanning...";
-            _send.Enabled = false; _send.Text = "Send";
+            _send.Enabled = false; _send.Text = "Get code";
+            _code.Text = "";
             _sendHint.ForeColor = Theme.Muted;
-            _sendHint.Text = "Discord ID: turn on Developer Mode, right-click your name, Copy User ID.";
+            _sendHint.Text = HintBefore;
             bool live = _mode == "injection" || _mode == "full";
             _stop.Visible = live; _stop.Enabled = live; _stop.Text = "Stop live watch";
             _start.Visible = !live;
@@ -325,8 +326,8 @@ namespace ModAnzer
                 _reportFile = _runner.ReportFile;
                 _send.Enabled = true;
                 _sendHint.ForeColor = Theme.Text;
-                _sendHint.Text = "Scan done. Enter your Discord ID and press Send.";
-                _discordId.Focus();
+                _sendHint.Text = HintReady;
+                _send.Focus();
             }
             Invalidate();
         }
@@ -489,19 +490,15 @@ namespace ModAnzer
             return m.Success ? m.Groups[1].Value : "";
         }
 
+        private const string HintBefore = "When the scan ends, press Get code and give the code to staff.";
+        private const string HintReady = "Scan done. Press Get code to send the results and get a code for staff.";
+
         private void SendReport()
         {
-            string id = _discordId.Text.Trim();
-            if (!Regex.IsMatch(id, @"^\d{17,20}$"))
-            {
-                _sendHint.ForeColor = Theme.Loss;
-                _sendHint.Text = "That is not a Discord ID. It is a long number: right-click your name, Copy User ID.";
-                return;
-            }
             if (_reportFile == null || string.IsNullOrEmpty(_reportUrl)) return;
             string report = File.ReadAllText(_reportFile, Encoding.UTF8).Trim();
             if (!report.StartsWith("{") || report.Length < 3) return;
-            string body = "{\"report\":{\"discordId\":\"" + id + "\"," + report.Substring(1) + "}";
+            string body = "{\"report\":" + report + "}";
 
             _send.Enabled = false; _send.Text = "Sending";
             _sendHint.ForeColor = Theme.Muted; _sendHint.Text = "Sending...";
@@ -515,9 +512,11 @@ namespace ModAnzer
                         wc.Encoding = Encoding.UTF8;
                         wc.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8";
                         wc.Headers[HttpRequestHeader.UserAgent] = "ModAnzer-App (github.com/napatc1/ModAnzer)";
-                        wc.UploadString(url, "POST", body);
+                        string resp = wc.UploadString(url, "POST", body);
+                        var m = Regex.Match(resp, "\"code\"\\s*:\\s*\"([2-9a-z]{6})\"");
+                        if (!m.Success) return Tuple.Create((string)null, "the server sent no code");
+                        return Tuple.Create(m.Groups[1].Value, (string)null);
                     }
-                    return (string)null;
                 }
                 catch (WebException ex)
                 {
@@ -526,26 +525,28 @@ namespace ModAnzer
                         using (var r = new StreamReader(ex.Response.GetResponseStream()))
                         {
                             var m = Regex.Match(r.ReadToEnd(), "\"error\"\\s*:\\s*\"([^\"]+)\"");
-                            if (m.Success) return m.Groups[1].Value;
+                            if (m.Success) return Tuple.Create((string)null, m.Groups[1].Value);
                         }
                     }
                     catch { }
-                    return ex.Message;
+                    return Tuple.Create((string)null, ex.Message);
                 }
-                catch (Exception ex) { return ex.Message; }
+                catch (Exception ex) { return Tuple.Create((string)null, ex.Message); }
             }).ContinueWith(t => BeginInvoke((Action)(() =>
             {
-                if (t.Result == null)
+                if (t.Result.Item1 != null)
                 {
                     _send.Text = "Sent";
+                    _code.Text = t.Result.Item1;
+                    try { Clipboard.SetText(t.Result.Item1); } catch { }
                     _sendHint.ForeColor = Theme.Win;
-                    _sendHint.Text = "Sent. Staff will see it in #mod-check.";
+                    _sendHint.Text = "Give this code to staff (it is copied). Only staff can see your results with it.";
                 }
                 else
                 {
                     _send.Enabled = true; _send.Text = "Retry";
                     _sendHint.ForeColor = Theme.Loss;
-                    _sendHint.Text = "Could not send: " + t.Result;
+                    _sendHint.Text = "Could not send: " + t.Result.Item2;
                 }
             })));
         }
@@ -603,7 +604,8 @@ namespace ModAnzer
             _send.Enabled = true;
             _start.Text = "Scan again";
             _sendHint.ForeColor = Theme.Text;
-            _sendHint.Text = "Scan done. Enter your Discord ID and press Send.";
+            _sendHint.Text = HintReady;
+            _code.Text = "7k3qxf";
         }
     }
 }

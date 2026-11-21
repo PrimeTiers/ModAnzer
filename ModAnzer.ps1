@@ -56,9 +56,6 @@
     Write the results report (JSON, user folders hidden) to this file instead of
     asking to send it. Used by ModAnzer.exe, which sends it with its own button.
 
-.PARAMETER DiscordId
-    Your Discord user ID, sent with the results (used with -NoPause instead of asking).
-
 .PARAMETER NoPause
     Don't wait for Enter at the end (by default it waits, so the window
     stays open when started with right-click > Run with PowerShell).
@@ -77,7 +74,6 @@ param(
     [string]$Mode = '',
     [int]$LiveSeconds = 0,
     [switch]$NoSend,
-    [string]$DiscordId = '',
     [string]$Launcher = '',
     [string]$StopFile = '',
     [string]$ReportOut = ''
@@ -110,6 +106,8 @@ $CheatStrings = @(
     'KillAura', 'CrystalAura', 'AnchorAura', 'AutoClicker'
 )
 $CheatRegex = [regex]::new(($CheatStrings | ForEach-Object { [regex]::Escape($_) }) -join '|')
+# A class named exactly like a cheat module, e.g. AutoTotem.class or TriggerBotModule.class.
+$CheatClassRegex = [regex]::new('^(?:' + (($CheatStrings | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')(?:Module|Hack|Feature|Mod)?$')
 
 # Weak names: also ordinary game-code words (getVelocity, renderHitboxes, controller
 # aim assist...). They only count when they are a whole name on their own: a class
@@ -132,7 +130,16 @@ $TrustedMods = @{
 
 # Extra trusted mods are also read from this file in the GitHub repo, so new
 # versions can be added by editing trusted.txt on GitHub (no script change needed).
-$TrustedListUrl = 'https://raw.githubusercontent.com/napatc1/ModAnzer/main/trusted.txt'
+$TrustedListUrl = 'https://raw.githubusercontent.com/PrimeTiers/ModAnzer/main/trusted.txt'
+
+# Cheats and PvP macros that are published on Modrinth (or Megabase/CurseForge) still count
+# as cheats. A known mod is flagged when:
+#  - its Modrinth slug or SHA1 is listed in flagged.txt in the GitHub repo (edit it on GitHub,
+#    no script change needed), or
+#  - its name says what it does (FlaggedNameRegex: "AutoTotem", "Crystal Macro"...), or
+#  - its jar has a class named like a cheat module (AutoTotem.class, TriggerBot.class...).
+$FlaggedListUrl = 'https://raw.githubusercontent.com/PrimeTiers/ModAnzer/main/flagged.txt'
+$FlaggedNameRegex = [regex]::new('(?ix) \bmacros?\b | auto[\s_-]?(totem|crystal|anchor|pot|clicker|click|hit|double[\s_-]?hand|shield[\s_-]?break) | trigger[\s_-]?bot | (crystal|anchor|kill)[\s_-]?aura | aim[\s_-]?(assist|bot|lock) | (inventory|legit|hover)[\s_-]?totem | jump[\s_-]?reset | ping[\s_-]?spoof | axe[\s_-]?spam | web[\s_-]?macro | self[\s_-]?destruct')
 
 # CurseForge lookups go through ModAnzer's small server, which keeps the CurseForge
 # API key private (source: supabase/functions/modanzer-cf in the repo). Only CurseForge
@@ -143,9 +150,9 @@ $CurseForgeProxyUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/mod
 # CurseForge directly instead. Can also be set with the MODANZER_CF_KEY environment variable.
 $CurseForgeApiKey = ''
 
-# Screenshare reports: when the scan ends the player can press Enter to send the results
-# to staff. They go to ModAnzer's server (source: supabase/functions/modanzer-report),
-# which saves them for the server's Discord bot to post in its mod-check channel.
+# Screenshare reports: when the scan ends the player can press Enter to send the results.
+# ModAnzer's server (source: supabase/functions/modanzer-report) saves them and sends back a
+# short code. The player gives the code to staff, who run /ssresult in the Discord bot.
 $ReportServerName = 'PrimeTiers'
 $ReportUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/modanzer-report'
 $script:RunReport = [ordered]@{ Mods = $null; System = $null; Injection = $null; Accounts = @() }
@@ -1417,6 +1424,7 @@ function Invoke-ModAnalyzer {
     # ---------------------------------------------------------------- 3. look up
 
     $known = @{}   # hash -> mod name
+    $slugByHash = @{}   # hash -> Modrinth slug
 
     if (-not $Offline -and $hashes.Count -gt 0) {
         Write-Host "`r[*] Checking $($hashes.Count) unique mods on Modrinth...      " -ForegroundColor Yellow -NoNewline
@@ -1432,15 +1440,17 @@ function Invoke-ModAnalyzer {
             }
             $ids = @($projectIdByHash.Values | Select-Object -Unique)
             $titleById = @{}
+            $slugById = @{}
             for ($n = 0; $n -lt $ids.Count; $n += 100) {
                 $chunk = @($ids[$n..([math]::Min($n + 99, $ids.Count - 1))])
                 $q = [uri]::EscapeDataString((ConvertTo-Json -InputObject $chunk -Compress))
-                foreach ($proj in (Invoke-Json "https://api.modrinth.com/v2/projects?ids=$q")) { $titleById[$proj.id] = $proj.title }
+                foreach ($proj in (Invoke-Json "https://api.modrinth.com/v2/projects?ids=$q")) { $titleById[$proj.id] = $proj.title; $slugById[$proj.id] = $proj.slug }
             }
             foreach ($h in $projectIdByHash.Keys) {
                 $t = $titleById[$projectIdByHash[$h]]
                 if (-not $t) { $t = '(Modrinth project)' }
                 $known[$h] = "$t"
+                if ($slugById[$projectIdByHash[$h]]) { $slugByHash[$h] = [string]$slugById[$projectIdByHash[$h]] }
             }
         } catch {
             Write-Host "`r[!] Modrinth lookup failed: $($_.Exception.Message)" -ForegroundColor Red
@@ -1523,6 +1533,47 @@ function Invoke-ModAnalyzer {
         }
     }
 
+    # ---------------------------------------------------------------- 3b. cheats among known mods
+
+    $flagged = @{}   # hash -> why a known mod counts as a cheat
+    $flaggedSlugs = @{}; $flaggedHashes = @{}
+    if (-not $Offline) {
+        try {
+            $list = Invoke-RestMethod -Uri $FlaggedListUrl -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 15
+            foreach ($line in ([string]$list -split "`n")) {
+                $line = ($line -replace '#.*$', '').Trim()
+                if ($line -match '^([0-9a-fA-F]{40})(?:\s+(.+))?$') { $flaggedHashes[$Matches[1].ToLowerInvariant()] = "$($Matches[2])" }
+                elseif ($line -match '^([A-Za-z0-9_.-]+)(?:\s+(.+))?$') { $flaggedSlugs[$Matches[1].ToLowerInvariant()] = "$($Matches[2])" }
+            }
+        } catch {}
+    }
+    $knownHashes = @($hashes | Where-Object { $known.ContainsKey($_) -and -not $TrustedMods.ContainsKey($_) })
+    $jarByHash = @{}
+    foreach ($j in $jars) { if ($j.Hash -and -not $jarByHash.ContainsKey($j.Hash)) { $jarByHash[$j.Hash] = $j.File } }
+    $i = 0
+    foreach ($h in $knownHashes) {
+        $i++
+        Write-Host "`r[*] Checking known mods for cheats $i / $($knownHashes.Count)      " -ForegroundColor Yellow -NoNewline
+        $slug = [string]$slugByHash[$h]
+        if ($flaggedHashes.ContainsKey($h)) { $flagged[$h] = "on the flagged list $($flaggedHashes[$h])".Trim(); continue }
+        if ($slug -and $flaggedSlugs.ContainsKey($slug.ToLowerInvariant())) { $flagged[$h] = "flagged Modrinth project '$slug' $($flaggedSlugs[$slug.ToLowerInvariant()])".Trim(); continue }
+        $nm = $FlaggedNameRegex.Match("$($known[$h]) $slug")
+        if ($nm.Success) { $flagged[$h] = "name says '$($nm.Value.Trim())'"; continue }
+        # Class names only (no unpacking), so this stays quick even with hundreds of mods.
+        $jar = $jarByHash[$h]
+        $zip = $null
+        try {
+            $zip = [IO.Compression.ZipFile]::OpenRead($jar.FullName)
+            $found = New-Object 'System.Collections.Generic.HashSet[string]'
+            foreach ($entry in $zip.Entries) {
+                if (-not $entry.FullName.EndsWith('.class')) { continue }
+                $leaf = [IO.Path]::GetFileNameWithoutExtension($entry.Name) -replace '\$.*$', ''
+                if ($CheatClassRegex.IsMatch($leaf)) { [void]$found.Add($leaf) }
+            }
+            if ($found.Count -gt 0) { $flagged[$h] = "has cheat modules: $(@($found | Sort-Object) -join ', ')" }
+        } catch {} finally { if ($zip) { $zip.Dispose() } }
+    }
+
     # ---------------------------------------------------------------- 4. scan unknown jars
 
     $scanned = @{}   # hash -> list of hits
@@ -1574,6 +1625,17 @@ function Invoke-ModAnalyzer {
         foreach ($j in $here) {
             $name = $j.File.Name
             $where = Get-InstanceLabel $f
+            if ($j.Hash -and $flagged.ContainsKey($j.Hash)) {
+                # Published on Modrinth/Megabase/CurseForge, but it is a cheat or PvP macro.
+                $totalCheat++
+                $why = "$($known[$j.Hash]): $($flagged[$j.Hash])"
+                $allList.Add([ordered]@{ Status = 'CHEAT'; Name = $name; Title = $why; Where = $where })
+                Write-Host "  [CHEAT] $name" -ForegroundColor Red
+                Write-Host "          known as $($known[$j.Hash]), but: $($flagged[$j.Hash])" -ForegroundColor Magenta
+                Write-Host "          sha1: $($j.Hash)" -ForegroundColor DarkGray
+                $cheatList.Add([PSCustomObject]@{ Name = $name; Where = $where; Strings = $why })
+                continue
+            }
             if ($j.Hash -and $known.ContainsKey($j.Hash)) {
                 $totalVerified++
                 $allList.Add([ordered]@{ Status = 'OK'; Name = $name; Title = [string]$known[$j.Hash]; Where = $where })
@@ -1702,24 +1764,20 @@ function Send-Report {
     }
     Write-Host
     Write-Host "Send these results to $ReportServerName staff? Close this window to not send." -ForegroundColor White
-    $sendId = ''
-    if ($NoPause) { $sendId = $DiscordId }
-    else {
-        Write-Host '  (Discord: Settings > Advanced > turn on Developer Mode, then right-click your name > Copy User ID)' -ForegroundColor DarkGray
-        while ($true) {
-            $sendId = (Read-Host 'What is your Discord ID').Trim()
-            if ($sendId -match '^\d{17,20}$') { break }
-            Write-Host '  A Discord ID is a long number, like 123456789012345678. Try again.' -ForegroundColor Red
-        }
-        Read-Host 'Press Enter to send data' | Out-Null
-    }
-    if ($sendId -match '^\d{17,20}$') { $report['discordId'] = $sendId }
+    if (-not $NoPause) { Read-Host 'Press Enter to send and get your code' | Out-Null }
     Write-Host "[*] Sending..." -ForegroundColor Yellow -NoNewline
     try {
         $body = '{"report":' + (Remove-UserInfo $report) + '}'
         $bytes = [Text.Encoding]::UTF8.GetBytes($body)
-        $null = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
-        Write-Host "`r[+] Sent. $ReportServerName staff will see the results in their mod-check channel." -ForegroundColor Green
+        $resp = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
+        Write-Host "`r[+] Sent.                    " -ForegroundColor Green
+        if ($resp.code) {
+            Write-Host
+            Write-Host "    Your code: " -ForegroundColor White -NoNewline
+            Write-Host "$($resp.code)" -ForegroundColor Yellow
+            Write-Host "    Give this code to $ReportServerName staff. Only staff can see your results with it." -ForegroundColor Gray
+            try { Set-Clipboard -Value "$($resp.code)" -ErrorAction Stop; Write-Host '    (copied to your clipboard)' -ForegroundColor DarkGray } catch {}
+        }
     } catch {
         $msg = $_.Exception.Message
         try { if ($_.ErrorDetails.Message) { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error } } catch {}

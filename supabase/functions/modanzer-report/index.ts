@@ -1,7 +1,8 @@
 // ModAnzer screenshare reports -> the PrimeTiers bot's MongoDB.
-// The script sends {report}. This checks it, trims it and saves it to the
-// `modanzer_reports` collection with status "new". The PrimeTiers Discord bot
-// picks up new reports and posts them in its mod-check channel.
+// The app sends {report}. This checks it, trims it and saves it to the
+// `modanzer_reports` collection under a short reference code, which it sends
+// back for the player to give to staff. Staff run /ssresult with that code in
+// the PrimeTiers Discord bot to see the report.
 // Secrets (set in this Supabase project):
 //   MODANZER_MONGODB_URI  connection string. Use a database user that can only
 //                         insert into modanzer_reports, not the bot's main login.
@@ -40,7 +41,6 @@ export function sanitize(raw: unknown) {
     tool: "ModAnzer",
     mode: str(r.mode, 40),
     finished: str(r.finished, 40),
-    discordId: typeof r.discordId === "string" && /^\d{17,20}$/.test(r.discordId) ? r.discordId : "",
     accounts: arr(r.accounts, 20).map((a) => str(a, 16)).filter(Boolean),
     mods: m && {
       Folders: arr(m.Folders, 50).map((f) => str(f, 120)),
@@ -57,6 +57,17 @@ export function sanitize(raw: unknown) {
     system: s && { Admin: s.Admin === true, Alerts: alerts(s.Alerts) },
     injection: i && { Admin: i.Admin === true, Uptime: str(i.Uptime, 30), GameFolder: str(i.GameFolder, 160), Alerts: alerts(i.Alerts) },
   };
+}
+
+// 6 characters from 31 letters and digits (no 0/o, 1/l/i), about 887 million codes.
+const CODE_CHARS = "23456789abcdefghjkmnpqrstuvwxyz";
+function newCode(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  // 248 is the largest multiple of 31 below 256; redraw bytes above it so every character is equally likely.
+  return Array.from(bytes, (b) => {
+    while (b >= 248) b = crypto.getRandomValues(new Uint8Array(1))[0];
+    return CODE_CHARS[b % 31];
+  }).join("");
 }
 
 async function shortHash(text: string): Promise<string> {
@@ -95,15 +106,19 @@ Deno.serve(async (req: Request) => {
       client = new MongoClient(uri, { maxPoolSize: 2, serverSelectionTimeoutMS: 8000 });
       await client.connect();
     }
-    const doc = {
-      ...report,
-      status: "new",
-      receivedAt: new Date(),
-      // groups reports from the same sender without storing the IP address
-      senderHash: await shortHash(ip + uri),
-    };
-    const res = await client.db(Deno.env.get("MODANZER_MONGODB_DB") ?? "primetiers").collection("modanzer_reports").insertOne(doc);
-    return json({ ok: true, id: String(res.insertedId) });
+    const col = client.db(Deno.env.get("MODANZER_MONGODB_DB") ?? "primetiers").collection("modanzer_reports");
+    const senderHash = await shortHash(ip + uri); // groups reports from one sender without storing the IP
+    // The bot keeps a unique index on refCode; on the rare clash, draw a new code.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const refCode = newCode();
+      try {
+        await col.insertOne({ ...report, refCode, status: "new", receivedAt: new Date(), senderHash });
+        return json({ ok: true, code: refCode });
+      } catch (err) {
+        if ((err as { code?: number })?.code !== 11000) throw err;
+      }
+    }
+    return json({ error: "the report server could not make a code - try again" }, 502);
   } catch (err) {
     client = null;
     console.error("insert failed:", err instanceof Error ? err.message : err);
