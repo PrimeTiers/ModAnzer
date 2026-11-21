@@ -42,9 +42,11 @@
     Injection Checker: stop the live watch after this many seconds
     (default: keep watching until you press Q).
 
-.PARAMETER Code
-    Screenshare code from the server's staff. With a code, the results are sent to
-    the server's mod-check channel when the scan ends.
+.PARAMETER NoSend
+    Don't offer to send the results to staff at the end.
+
+.PARAMETER DiscordId
+    Your Discord user ID, sent with the results (used with -NoPause instead of asking).
 
 .PARAMETER NoPause
     Don't wait for Enter at the end (by default it waits, so the window
@@ -63,7 +65,8 @@ param(
     [switch]$NoPause,
     [string]$Mode = '',
     [int]$LiveSeconds = 0,
-    [string]$Code = ''
+    [switch]$NoSend,
+    [string]$DiscordId = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -126,9 +129,9 @@ $CurseForgeProxyUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/mod
 # CurseForge directly instead. Can also be set with the MODANZER_CF_KEY environment variable.
 $CurseForgeApiKey = ''
 
-# Screenshare reports: with a code from staff, the results are sent to the server's
-# mod-check channel through ModAnzer's server (source: supabase/functions/modanzer-report).
-# The Discord webhook stays on that server; this script never contains it.
+# Screenshare reports: when the scan ends the player can press Enter to send the results
+# to staff. They go to ModAnzer's server (source: supabase/functions/modanzer-report),
+# which saves them for the server's Discord bot to post in its mod-check channel.
 $ReportServerName = 'PrimeTiers'
 $ReportUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/modanzer-report'
 $script:RunReport = [ordered]@{ Mods = $null; System = $null; Injection = $null; Accounts = @() }
@@ -353,9 +356,9 @@ if (-not $SkipIntro) {
     Write-Host '  so it can read those Windows records - you can say no.' -ForegroundColor Gray
     Write-Host
     Write-Host 'It does NOT:' -ForegroundColor White
-    Write-Host '  - Upload your files. It sends mod fingerprints for the lookups and, ONLY if you' -ForegroundColor Gray
-    Write-Host "    enter a screenshare code from $ReportServerName staff, a summary of the results" -ForegroundColor Gray
-    Write-Host "    to the $ReportServerName mod-check channel (user folders shown as ~)" -ForegroundColor Gray
+    Write-Host '  - Upload your files. It sends mod fingerprints for the lookups and, ONLY when you' -ForegroundColor Gray
+    Write-Host "    press Enter at the end, a summary of the results to $ReportServerName staff" -ForegroundColor Gray
+    Write-Host '    (user folders shown as ~, Minecraft account names included)' -ForegroundColor Gray
     Write-Host '  - Read passwords, tokens, emails, browser data or Discord' -ForegroundColor Gray
     Write-Host '  - Change the game''s memory, or inject into or interfere with any program' -ForegroundColor Gray
     Write-Host '  - Change, move or delete any files, or change any settings' -ForegroundColor Gray
@@ -865,6 +868,44 @@ function Get-ProfileNames($obj, $into) {
     }
 }
 
+# Minecraft account NAMES from launcher files and game logs (never tokens or emails).
+function Get-MinecraftAccountNames {
+    $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $acctFiles = @(
+        "$env:APPDATA\.minecraft\launcher_accounts.json",
+        "$env:APPDATA\.minecraft\launcher_accounts_microsoft_store.json",
+        "$env:APPDATA\PrismLauncher\accounts.json",
+        "$env:APPDATA\PolyMC\accounts.json",
+        "$env:USERPROFILE\.lunarclient\settings\game\accounts.json"
+    )
+    foreach ($af in $acctFiles) {
+        if (-not (Test-Path -LiteralPath $af)) { continue }
+        try { Get-ProfileNames (Get-Content -Raw -LiteralPath $af | ConvertFrom-Json) $names } catch {}
+    }
+    $logGlobs = @(
+        "$env:APPDATA\.minecraft\logs\latest.log",
+        "$env:APPDATA\ModrinthApp\profiles\*\logs\latest.log",
+        "$env:APPDATA\PrismLauncher\instances\*\.minecraft\logs\latest.log",
+        "$env:USERPROFILE\curseforge\minecraft\Instances\*\logs\latest.log",
+        "$env:APPDATA\.dawn\*\logs\latest.log",
+        "$env:USERPROFILE\.lunarclient\logs\game\*.log"
+    )
+    foreach ($g in $logGlobs) {
+        foreach ($lf in @(Get-ChildItem -Path $g -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 10)) {
+            try {
+                $fs = [IO.File]::Open($lf.FullName, 'Open', 'Read', 'ReadWrite')
+                try {
+                    $len = [math]::Min($fs.Length, 2MB)
+                    $buf = New-Object byte[] $len
+                    [void]$fs.Read($buf, 0, $len)
+                    foreach ($m in [regex]::Matches([Text.Encoding]::UTF8.GetString($buf), 'Setting user:\s*([A-Za-z0-9_]{3,16})')) { [void]$names.Add($m.Groups[1].Value) }
+                } finally { $fs.Dispose() }
+            } catch {}
+        }
+    }
+    return ,$names
+}
+
 function Invoke-SystemCheck {
     Write-Section 'System Check'
     if (-not $IsWindowsOS) { Write-Host '  The System Check only works on Windows.' -ForegroundColor Red; return }
@@ -1083,39 +1124,7 @@ function Invoke-SystemCheck {
 
     # 9. Minecraft accounts (names only)
     Write-Section 'Minecraft accounts used on this PC (names only)'
-    $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    $acctFiles = @(
-        "$env:APPDATA\.minecraft\launcher_accounts.json",
-        "$env:APPDATA\.minecraft\launcher_accounts_microsoft_store.json",
-        "$env:APPDATA\PrismLauncher\accounts.json",
-        "$env:APPDATA\PolyMC\accounts.json",
-        "$env:USERPROFILE\.lunarclient\settings\game\accounts.json"
-    )
-    foreach ($af in $acctFiles) {
-        if (-not (Test-Path -LiteralPath $af)) { continue }
-        try { Get-ProfileNames (Get-Content -Raw -LiteralPath $af | ConvertFrom-Json) $names } catch {}
-    }
-    $logGlobs = @(
-        "$env:APPDATA\.minecraft\logs\latest.log",
-        "$env:APPDATA\ModrinthApp\profiles\*\logs\latest.log",
-        "$env:APPDATA\PrismLauncher\instances\*\.minecraft\logs\latest.log",
-        "$env:USERPROFILE\curseforge\minecraft\Instances\*\logs\latest.log",
-        "$env:APPDATA\.dawn\*\logs\latest.log",
-        "$env:USERPROFILE\.lunarclient\logs\game\*.log"
-    )
-    foreach ($g in $logGlobs) {
-        foreach ($lf in @(Get-ChildItem -Path $g -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 10)) {
-            try {
-                $fs = [IO.File]::Open($lf.FullName, 'Open', 'Read', 'ReadWrite')
-                try {
-                    $len = [math]::Min($fs.Length, 2MB)
-                    $buf = New-Object byte[] $len
-                    [void]$fs.Read($buf, 0, $len)
-                    foreach ($m in [regex]::Matches([Text.Encoding]::UTF8.GetString($buf), 'Setting user:\s*([A-Za-z0-9_]{3,16})')) { [void]$names.Add($m.Groups[1].Value) }
-                } finally { $fs.Dispose() }
-            } catch {}
-        }
-    }
+    $names = Get-MinecraftAccountNames
     if ($names.Count -eq 0) { Write-Host '  None found.' -ForegroundColor DarkGray }
     else {
         Write-Host "  $(@($names | Sort-Object) -join ', ')" -ForegroundColor Gray
@@ -1162,18 +1171,6 @@ if (-not $Mode) {
     }
 }
 
-# Screenshare code: with one, the results go to the server's mod-check channel at the end.
-if (-not $Code -and -not $SkipIntro) {
-    Write-Host "Screenshare code from $ReportServerName staff (press Enter to skip - nothing will be sent):" -ForegroundColor White
-    $Code = (Read-Host 'Code').Trim()
-    Write-Host
-}
-if ($Code -and $Code -notmatch '^[A-Za-z0-9_-]{3,64}$') {
-    Write-Host 'That code has characters that are not allowed - results will not be sent.' -ForegroundColor Red
-    $Code = ''
-}
-if ($Code) { Write-Host "Results will be sent to the $ReportServerName mod-check channel when the scan ends." -ForegroundColor Cyan; Write-Host }
-
 # The System Check and the memory scan see more as administrator. Offer to restart elevated.
 if ($Mode -ne 'mods' -and $IsWindowsOS -and -not (Test-Admin)) {
     Write-Host 'Administrator rights let ModAnzer read execution history, Prefetch, the Security log and the game''s memory.' -ForegroundColor White
@@ -1182,7 +1179,7 @@ if ($Mode -ne 'mods' -and $IsWindowsOS -and -not (Test-Admin)) {
         $extra = "-Mode $Mode -SkipIntro"
         if ($Offline) { $extra += ' -Offline' }
         if ($LiveSeconds -gt 0) { $extra += " -LiveSeconds $LiveSeconds" }
-        if ($Code) { $extra += " -Code $Code" }
+        if ($NoSend) { $extra += ' -NoSend' }
         if ($PSCommandPath) {
             $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $extra"
         } else {
@@ -1603,20 +1600,35 @@ function Remove-UserInfo($obj) {
 }
 
 function Send-Report {
-    if (-not $Code) { return }
+    if ($NoSend) { return }
     $modeName = @{ mods = 'Mod Analyzer'; injection = 'Injection Checker'; system = 'System Check'; full = 'Full Screenshare' }[$Mode]
+    $accounts = @($script:RunReport.Accounts)
+    if ($accounts.Count -eq 0) { try { $set = Get-MinecraftAccountNames; $accounts = @($set | Sort-Object) } catch {} }
     $report = [ordered]@{
         tool = 'ModAnzer'; mode = $modeName; finished = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz')
-        accounts = @($script:RunReport.Accounts); mods = $script:RunReport.Mods
+        accounts = $accounts; mods = $script:RunReport.Mods
         system = $script:RunReport.System; injection = $script:RunReport.Injection
     }
     Write-Host
-    Write-Host "[*] Sending the results to the $ReportServerName mod-check channel..." -ForegroundColor Yellow -NoNewline
+    Write-Host "Send these results to $ReportServerName staff? Close this window to not send." -ForegroundColor White
+    $sendId = ''
+    if ($NoPause) { $sendId = $DiscordId }
+    else {
+        Write-Host '  (Discord: Settings > Advanced > turn on Developer Mode, then right-click your name > Copy User ID)' -ForegroundColor DarkGray
+        while ($true) {
+            $sendId = (Read-Host 'What is your Discord ID').Trim()
+            if ($sendId -match '^\d{17,20}$') { break }
+            Write-Host '  A Discord ID is a long number, like 123456789012345678. Try again.' -ForegroundColor Red
+        }
+        Read-Host 'Press Enter to send data' | Out-Null
+    }
+    if ($sendId -match '^\d{17,20}$') { $report['discordId'] = $sendId }
+    Write-Host "[*] Sending..." -ForegroundColor Yellow -NoNewline
     try {
-        $body = '{"code":' + ($Code | ConvertTo-Json) + ',"report":' + (Remove-UserInfo $report) + '}'
+        $body = '{"report":' + (Remove-UserInfo $report) + '}'
         $bytes = [Text.Encoding]::UTF8.GetBytes($body)
-        $r = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
-        Write-Host "`r[+] Results sent to the $ReportServerName mod-check channel.            " -ForegroundColor Green
+        $null = Invoke-RestMethod -Uri $ReportUrl -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 30
+        Write-Host "`r[+] Sent. $ReportServerName staff will see the results in their mod-check channel." -ForegroundColor Green
     } catch {
         $msg = $_.Exception.Message
         try { if ($_.ErrorDetails.Message) { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error } } catch {}

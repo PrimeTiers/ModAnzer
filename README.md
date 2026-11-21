@@ -86,20 +86,33 @@ Looks for traces of cheating on the PC (Windows only):
 
 Everything is a lead, not proof. Check each one with the player.
 
-### Sending results to Discord
+### Sending results to staff
 
-At the start, ModAnzer asks for a **screenshare code** from PrimeTiers staff. If the player enters one, a summary of the results is sent automatically to the PrimeTiers `#mod-check` channel when the scan ends: an embed with the counts and every cheat and alert, plus the full report as a text file. If they press Enter instead, nothing is sent. You can also pass the code with `-Code <code>`.
+When the scan ends, ModAnzer asks **"What is your Discord ID"**, then shows **"Press Enter to send data"**. Pressing Enter sends a summary of the results to PrimeTiers staff; closing the window instead sends nothing. Use `-NoSend` to skip this, or `-NoPause -DiscordId <id>` to send without asking.
 
-- Reports go through ModAnzer's server ([`supabase/functions/modanzer-report`](supabase/functions/modanzer-report/index.ts)). The Discord webhook is stored there, never in the script.
-- The server only accepts reports with a valid code, rate-limits each IP address, and blocks @everyone and other pings.
+- Reports go to ModAnzer's server ([`supabase/functions/modanzer-report`](supabase/functions/modanzer-report/index.ts)), which saves them in the PrimeTiers bot's MongoDB, in the `modanzer_reports` collection with `status: "new"`. The PrimeTiers bot picks up new reports and posts them in `#mod-check`.
+- The server keeps only the fields ModAnzer sends, caps their sizes, and accepts only a real Discord ID (17–20 digits). It rate-limits each sender to 6 reports a minute and doesn't store IP addresses.
 - Windows user folders are shown as `~` and user names as `<user>`. Minecraft account **names** are included, never tokens or emails.
 
 Setup, in the **excusemecounter** Supabase project under **Edge Functions → Secrets**:
 
 | Secret | Value |
 |---|---|
-| `MODCHECK_WEBHOOK_URL` | the webhook URL of `#mod-check` (channel settings → Integrations → Webhooks) |
-| `MODCHECK_CODES` | the code(s) staff give players, comma-separated. Change it if it leaks |
+| `MODANZER_MONGODB_URI` | connection string for the PrimeTiers MongoDB. Use a separate database user that can only insert into `modanzer_reports`, not the bot's own login |
+| `MODANZER_MONGODB_DB` | database name, if it isn't `primetiers` |
+
+Saved report document:
+
+```json
+{
+  "tool": "ModAnzer", "mode": "Full Screenshare", "finished": "2026-11-21 09:30:00 +07:00",
+  "discordId": "123456789012345678", "accounts": ["Steve"],
+  "mods": { "Folders": [], "Verified": 0, "CurseForgeApp": 0, "Unknown": 0, "Cheat": 0, "Cheats": [{ "Name": "", "Where": "", "Strings": "" }], "Unknowns": [{ "Name": "", "Where": "" }] },
+  "system":    { "Admin": true, "Alerts": [{ "Time": "09:20", "Level": "Red", "Text": "" }] },
+  "injection": { "Admin": true, "Uptime": "", "GameFolder": "", "Alerts": [] },
+  "status": "new", "receivedAt": "<date>", "senderHash": "<16 hex>"
+}
+```
 
 ### Antivirus
 
