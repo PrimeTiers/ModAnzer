@@ -1,7 +1,7 @@
 From bf2c0d40a82ce2a2eeeae8f162253bd01260ff39 Mon Sep 17 00:00:00 2001
 From: napatc1 <napatchoomchaiyot@gmail.com>
 Date: Sat, 21 Nov 2026 15:02:29 +0000
-Subject: [PATCH 1/3] Give players a reference code instead of asking for their
+Subject: [PATCH 1/2] Give players a reference code instead of asking for their
  Discord ID
 
 - The report server saves each report under a random 6-character code
@@ -544,7 +544,7 @@ index 2331eef..7dffec5 100644
 From a8c9f088b7c5f08264976329ebd92402ce962eaf Mon Sep 17 00:00:00 2001
 From: napatc1 <napatchoomchaiyot@gmail.com>
 Date: Sat, 21 Nov 2026 15:03:39 +0000
-Subject: [PATCH 2/3] Report server: still accept a Discord ID from older
+Subject: [PATCH 2/2] Report server: still accept a Discord ID from older
  ModAnzer versions
 
 ---
@@ -564,34 +564,6 @@ index 7dffec5..c8e3d21 100644
      accounts: arr(r.accounts, 20).map((a) => str(a, 16)).filter(Boolean),
      mods: m && {
        Folders: arr(m.Folders, 50).map((f) => str(f, 120)),
--- 
-2.43.0
-
-
-From e13af4471d9b68ad52404b1ef2595eb2931f4cb7 Mon Sep 17 00:00:00 2001
-From: napatc1 <napatchoomchaiyot@gmail.com>
-Date: Sat, 21 Nov 2026 15:10:36 +0000
-Subject: [PATCH 3/3] Let the release build be started by hand or by another
- workflow
-
----
- .github/workflows/android.yml | 3 +++
- 1 file changed, 3 insertions(+)
-
-diff --git a/.github/workflows/android.yml b/.github/workflows/android.yml
-index 826df06..0db54a2 100644
---- a/.github/workflows/android.yml
-+++ b/.github/workflows/android.yml
-@@ -1,6 +1,9 @@
- name: Build release
- 
- on:
-+  # Also started by the "Apply patches" workflow after it pushes, because a push made
-+  # by a workflow doesn't start other workflows on its own.
-+  workflow_dispatch:
-   push:
-     branches: [main]
-     paths:
 -- 
 2.43.0
 
