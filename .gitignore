@@ -4,3 +4,6 @@ android/app/build/
 android/local.properties
 *.iml
 .idea/
+exe/bin/
+exe/obj/
+exe-out/
