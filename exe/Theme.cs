@@ -108,10 +108,10 @@ namespace ModAnzer
             }
         }
 
-        public static void DrawText(Graphics g, string text, Font font, Color color, RectangleF r, StringAlignment h = StringAlignment.Near, StringAlignment v = StringAlignment.Center)
+        public static void DrawText(Graphics g, string text, Font font, Color color, RectangleF r, StringAlignment h = StringAlignment.Near, StringAlignment v = StringAlignment.Center, bool trim = true)
         {
             g.TextRenderingHint = font.FontFamily.Name.StartsWith("Silkscreen") ? TextRenderingHint.SingleBitPerPixelGridFit : TextRenderingHint.ClearTypeGridFit;
-            using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Alignment = h, LineAlignment = v, Trimming = StringTrimming.EllipsisCharacter })
+            using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Alignment = h, LineAlignment = v, Trimming = trim ? StringTrimming.EllipsisCharacter : StringTrimming.None })
             using (var br = new SolidBrush(color))
                 g.DrawString(text, font, br, r, sf);
         }
@@ -194,7 +194,7 @@ namespace ModAnzer
         public string Value = "";
         public Color ValueColor = Theme.Gold;
         private readonly Font _labelFont = Theme.Sans(13);
-        private readonly Font _valueFont = Theme.Pixel(24);
+        private readonly Font _valueFont = Theme.Pixel(32);
 
         public StatBox()
         {
