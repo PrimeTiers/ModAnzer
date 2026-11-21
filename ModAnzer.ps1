@@ -45,6 +45,17 @@
 .PARAMETER NoSend
     Don't offer to send the results to staff at the end.
 
+.PARAMETER Launcher
+    Mod Analyzer: 'all' to scan every launcher, or part of a launcher's name
+    (e.g. 'CurseForge'), instead of asking.
+
+.PARAMETER StopFile
+    Injection Checker: the live watch stops when this file appears.
+
+.PARAMETER ReportOut
+    Write the results report (JSON, user folders hidden) to this file instead of
+    asking to send it. Used by ModAnzer.exe, which sends it with its own button.
+
 .PARAMETER DiscordId
     Your Discord user ID, sent with the results (used with -NoPause instead of asking).
 
@@ -66,7 +77,10 @@ param(
     [string]$Mode = '',
     [int]$LiveSeconds = 0,
     [switch]$NoSend,
-    [string]$DiscordId = ''
+    [string]$DiscordId = '',
+    [string]$Launcher = '',
+    [string]$StopFile = '',
+    [string]$ReportOut = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -349,7 +363,7 @@ function Invoke-Json([string]$uri, [string]$method = 'Get', $body = $null) {
 
 # ---------------------------------------------------------------- 1. find folders
 
-Clear-Host
+if ($Host.Name -eq 'ConsoleHost') { try { Clear-Host } catch {} }
 Write-Host 'ModAnzer' -ForegroundColor Yellow -NoNewline
 Write-Host '  - Minecraft screenshare tool (based on HabibiModAnalyzer by HadronCollision)' -ForegroundColor DarkGray
 Write-Host
@@ -515,6 +529,10 @@ function Start-InjectionChecker {
     Write-Section 'Injection Checker'
     $procs = @(Get-MinecraftProcesses)
     while ($procs.Count -eq 0) {
+        if ($NoPause) {
+            Write-Host 'No running Minecraft found. Start the game, then run the Injection Checker again.' -ForegroundColor Red
+            return
+        }
         $in = Read-Host 'No running Minecraft found. Start the game, then press Enter to look again (Q to quit)'
         if ($in -match '^\s*[qQ]') { return }
         $procs = @(Get-MinecraftProcesses)
@@ -526,6 +544,7 @@ function Start-InjectionChecker {
             Write-Host ('  {0}) PID {1}  {2}' -f ($n + 1), $procs[$n].Pid, $(if ($gd) { Get-ShortPath $gd } else { '' }))
         }
         $pick = 0
+        if ($NoPause) { $pick = 1; Write-Host '  Checking the first one.' -ForegroundColor DarkGray }
         while ($pick -lt 1 -or $pick -gt $procs.Count) { [void][int]::TryParse((Read-Host "Which Minecraft? 1-$($procs.Count)"), [ref]$pick) }
         $p = $procs[$pick - 1]
     }
@@ -594,7 +613,7 @@ function Start-InjectionChecker {
     Write-Section 'Live watch'
     Write-Host '  Watching for anything injected into the game, mods added or removed, and new programs' -ForegroundColor Gray
     Write-Host '  started from Downloads/Desktop/Temp. Keep this window open during the fight.' -ForegroundColor Gray
-    if ($LiveSeconds -le 0) { Write-Host '  Press Q to stop.' -ForegroundColor Yellow }
+    if ($LiveSeconds -le 0 -and -not $StopFile) { Write-Host '  Press Q to stop.' -ForegroundColor Yellow }
     Write-Host
 
     $known = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -610,6 +629,7 @@ function Start-InjectionChecker {
     while ($true) {
         $elapsed = (Get-Date) - $start
         if ($LiveSeconds -gt 0 -and $elapsed.TotalSeconds -ge $LiveSeconds) { break }
+        if ($StopFile -and (Test-Path -LiteralPath $StopFile)) { break }
         if ($canReadKeys) {
             try {
                 if ([Console]::KeyAvailable) {
@@ -1188,7 +1208,7 @@ if (-not $Mode) {
 }
 
 # The System Check and the memory scan see more as administrator. Offer to restart elevated.
-if ($Mode -ne 'mods' -and $IsWindowsOS -and -not (Test-Admin)) {
+if ($Mode -ne 'mods' -and $IsWindowsOS -and -not $NoPause -and -not (Test-Admin)) {
     Write-Host 'Administrator rights let ModAnzer read execution history, Prefetch, the Security log and the game''s memory.' -ForegroundColor White
     $ans = (Read-Host 'Restart as administrator for a full check? [Y/n]').Trim()
     if ($ans -eq '' -or $ans -match '^[yY]') {
@@ -1290,6 +1310,15 @@ function Invoke-ModAnalyzer {
         Write-Host
 
         $choice = $null
+        if ($Launcher -or $NoPause) {
+            $choice = 1
+            if ($Launcher -and $Launcher -ne 'all') {
+                for ($n = 0; $n -lt $Launchers.Count; $n++) {
+                    if ($Launchers[$n].Name -like "*$Launcher*") { $choice = $n + 2; break }
+                }
+            }
+            Write-Host "Choose 1-$($otherNum): $choice" -ForegroundColor DarkGray
+        }
         while ($null -eq $choice) {
             $in = (Read-Host "Choose 1-$otherNum").Trim()
             if ($in -eq '') { $in = '1' }
@@ -1313,6 +1342,7 @@ function Invoke-ModAnalyzer {
                 Write-Host "`r$(' ' * 70)`r" -NoNewline
                 Write-Host "No $($pick.Name) mods folder found in the usual place." -ForegroundColor Red
                 while ($true) {
+                    if ($NoPause) { Write-Host 'Scanning everything instead.' -ForegroundColor DarkGray; $choice = 1; break }
                     $typed = Read-Host 'Paste the path to your mods folder (or press Enter to scan everything)'
                     if (-not $typed.Trim()) { $choice = 1; break }
                     if (Add-UserFolder $typed) { break }
@@ -1665,6 +1695,10 @@ function Send-Report {
         tool = 'ModAnzer'; mode = $modeName; finished = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz')
         accounts = $accounts; mods = $script:RunReport.Mods
         system = $script:RunReport.System; injection = $script:RunReport.Injection
+    }
+    if ($ReportOut) {
+        [IO.File]::WriteAllText($ReportOut, (Remove-UserInfo $report), (New-Object Text.UTF8Encoding($false)))
+        return
     }
     Write-Host
     Write-Host "Send these results to $ReportServerName staff? Close this window to not send." -ForegroundColor White
