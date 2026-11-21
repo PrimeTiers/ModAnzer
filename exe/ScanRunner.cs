@@ -27,7 +27,7 @@ namespace ModAnzer
             using (var r = new StreamReader(s)) return r.ReadToEnd();
         }
 
-        public void Start(string mode, bool offline)
+        public void Start(string mode, bool offline, string launcher = "all", string[] path = null)
         {
             string tmp = Path.Combine(Path.GetTempPath(), "ModAnzer-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             StopFile = tmp + ".stop";
@@ -35,10 +35,11 @@ namespace ModAnzer
 
             var args = new Dictionary<string, object>
             {
-                { "Mode", mode }, { "SkipIntro", true }, { "NoPause", true }, { "Launcher", "all" },
+                { "Mode", mode }, { "SkipIntro", true }, { "NoPause", true }, { "Launcher", string.IsNullOrEmpty(launcher) ? "all" : launcher },
                 { "StopFile", StopFile }, { "ReportOut", ReportFile }
             };
             if (offline) args["Offline"] = true;
+            if (path != null && path.Length > 0) args["Path"] = path;
 
             _thread = new Thread(() => Run(args)) { IsBackground = true, Name = "ModAnzer scan" };
             _thread.SetApartmentState(ApartmentState.STA); // Shell / COM lookups need STA

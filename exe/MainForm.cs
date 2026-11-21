@@ -24,11 +24,28 @@ namespace ModAnzer
             new[] { "full", "Full Screenshare", "All three, one after another" },
         };
 
+        // Which launcher the Mod Analyzer looks in. The value is passed to the script's -Launcher
+        // (matched against its launcher names); "other" asks for a folder and passes -Path instead.
+        private static readonly string[][] Launchers =
+        {
+            new[] { "all", "All launchers" },
+            new[] { "Minecraft Launcher", "Minecraft Launcher" },
+            new[] { "CurseForge", "CurseForge" },
+            new[] { "Modrinth", "Modrinth App" },
+            new[] { "Prism", "Prism / MultiMC" },
+            new[] { "Lunar", "Lunar Client" },
+            new[] { "other", "Other folder..." },
+        };
+
         private readonly PixelLabel _titleA = new PixelLabel();
         private readonly PixelLabel _titleB = new PixelLabel();
         private readonly Label _blurb = new Label();
         private readonly PixelButton[] _modeButtons = new PixelButton[4];
         private readonly PixelButton _start = new PixelButton();
+        private readonly PixelLabel _launcherTitle = new PixelLabel();
+        private readonly PixelButton[] _launcherButtons = new PixelButton[Launchers.Length];
+        private string _launcher = "all";
+        private string _otherFolder;
         private readonly PixelButton _stop = new PixelButton();
         private readonly PixelButton _admin = new PixelButton();
         private readonly StatBox[] _stats = new StatBox[5];
@@ -70,8 +87,8 @@ namespace ModAnzer
             BackColor = Theme.Bg;
             ForeColor = Theme.Text;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(Theme.S(1120), Theme.S(760));
-            MinimumSize = new Size(Theme.S(980), Theme.S(700));
+            ClientSize = new Size(Theme.S(1120), Theme.S(820));
+            MinimumSize = new Size(Theme.S(980), Theme.S(780));
             DoubleBuffered = true;
             SetStyle(ControlStyles.ResizeRedraw, true);
 
@@ -98,6 +115,16 @@ namespace ModAnzer
             _stop.Text = "Stop live watch"; _stop.Visible = false;
             _stop.Click += (s, e) => { if (_runner != null) { _runner.RequestStop(); _stop.Enabled = false; _stop.Text = "Stopping..."; } };
             Controls.AddRange(new Control[] { _start, _stop });
+
+            _launcherTitle.Text = "Launcher"; _launcherTitle.Font = Theme.Pixel(14); _launcherTitle.ForeColor = Theme.Muted;
+            Controls.Add(_launcherTitle);
+            for (int i = 0; i < Launchers.Length; i++)
+            {
+                var b = new PixelButton { Text = Launchers[i][1], Tag = Launchers[i][0], TitleFont = Theme.Pixel(13) };
+                b.Click += (s, e) => { if (!_running) PickLauncher((string)((Control)s).Tag); };
+                _launcherButtons[i] = b;
+                Controls.Add(b);
+            }
 
             // header: admin
             _admin.Text = _isAdmin ? "Administrator" : "Restart as admin";
@@ -154,10 +181,21 @@ namespace ModAnzer
             _titleA.SetBounds(x, y, leftW, Theme.S(46)); y += Theme.S(46);
             _titleB.SetBounds(x, y, leftW, Theme.S(50)); y += Theme.S(58);
             _blurb.SetBounds(x, y, leftW, Theme.S(66)); y += Theme.S(76);
-            foreach (var b in _modeButtons) { b.SetBounds(x, y, leftW, Theme.S(64)); y += Theme.S(74); }
-            y += Theme.S(8);
-            _start.SetBounds(x, y, leftW, Theme.S(60)); y += Theme.S(70);
-            _stop.SetBounds(x, y, leftW, Theme.S(46));
+            foreach (var b in _modeButtons) { b.SetBounds(x, y, leftW, Theme.S(58)); y += Theme.S(64); }
+            y += Theme.S(6);
+            _start.SetBounds(x, y, leftW, Theme.S(60));
+            _stop.SetBounds(x, y, leftW, Theme.S(60)); // takes Start's place during a live watch
+            y += Theme.S(76);
+
+            // launcher picker fills the rest of the left column: one column when it fits, else two
+            _launcherTitle.SetBounds(x, y, leftW, Theme.S(22)); y += Theme.S(28);
+            int lgap = Theme.S(6), room = ClientSize.Height - pad - y;
+            int cols = room / Launchers.Length - lgap >= Theme.S(30) ? 1 : 2;
+            int rows = (Launchers.Length + cols - 1) / cols;
+            int lw = (leftW - lgap * (cols - 1)) / cols;
+            int lh = Math.Max(Theme.S(24), Math.Min(Theme.S(40), room / rows - lgap));
+            for (int i = 0; i < _launcherButtons.Length; i++)
+                _launcherButtons[i].SetBounds(x + (i % cols) * (lw + lgap), y + (i / cols) * (lh + lgap), lw, lh);
 
             _admin.SetBounds(ClientSize.Width - pad - Theme.S(280), (header - Theme.S(40)) / 2, Theme.S(280), Theme.S(40));
 
@@ -212,6 +250,38 @@ namespace ModAnzer
         {
             _mode = mode;
             foreach (var b in _modeButtons) { b.Selected = (string)b.Tag == mode; b.Invalidate(); }
+            UpdateLaunchers();
+        }
+
+        private bool ScansMods { get { return _mode == "mods" || _mode == "full"; } }
+
+        private void PickLauncher(string launcher)
+        {
+            if (launcher == "other")
+            {
+                using (var dlg = new FolderBrowserDialog { Description = "Pick your mods folder (or the launcher folder that holds it)", ShowNewFolderButton = false })
+                {
+                    if (!string.IsNullOrEmpty(_otherFolder)) dlg.SelectedPath = _otherFolder;
+                    if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(dlg.SelectedPath)) return;
+                    _otherFolder = dlg.SelectedPath;
+                }
+            }
+            _launcher = launcher;
+            UpdateLaunchers();
+        }
+
+        private void UpdateLaunchers()
+        {
+            // the launcher only matters for the Mod Analyzer part of a scan
+            bool on = ScansMods && !_running;
+            foreach (var b in _launcherButtons)
+            {
+                b.Selected = (string)b.Tag == _launcher;
+                b.Enabled = on;
+                if ((string)b.Tag == "other")
+                    b.Text = _launcher == "other" && !string.IsNullOrEmpty(_otherFolder) ? Path.GetFileName(_otherFolder.TrimEnd(Path.DirectorySeparatorChar)) : "Other folder...";
+                b.Invalidate();
+            }
         }
 
         private void StartScan()
@@ -222,19 +292,23 @@ namespace ModAnzer
             _suspicious = 0;
             foreach (var s in _stats) s.Set("-", Theme.Dim);
             foreach (var b in _modeButtons) b.Enabled = false;
+            foreach (var b in _launcherButtons) b.Enabled = false;
             _start.Enabled = false; _start.Text = "Scanning...";
             _send.Enabled = false; _send.Text = "Send";
             _sendHint.ForeColor = Theme.Muted;
             _sendHint.Text = "Discord ID: turn on Developer Mode, right-click your name, Copy User ID.";
             bool live = _mode == "injection" || _mode == "full";
             _stop.Visible = live; _stop.Enabled = live; _stop.Text = "Stop live watch";
+            _start.Visible = !live;
+            if (live) _stop.BringToFront();
             _out.Clear(); _line.Clear(); _lineStart = 0;
             Invalidate();
 
             _runner = new ScanRunner();
             _runner.Output += (t, c, n) => _queue.Enqueue(Tuple.Create(t, c, n));
             _runner.Finished += code => BeginInvoke((Action)(() => OnFinished(code)));
-            _runner.Start(_mode, false);
+            string[] folder = _launcher == "other" && !string.IsNullOrEmpty(_otherFolder) ? new[] { _otherFolder } : null;
+            _runner.Start(_mode, false, folder == null ? _launcher : "all", folder);
         }
 
         private void OnFinished(int code)
@@ -242,8 +316,10 @@ namespace ModAnzer
             Flush();
             _running = false;
             foreach (var b in _modeButtons) b.Enabled = true;
+            UpdateLaunchers();
             _start.Enabled = true; _start.Text = "Scan again";
             _stop.Visible = false;
+            _start.Visible = true;
             if (_runner != null && File.Exists(_runner.ReportFile) && new FileInfo(_runner.ReportFile).Length > 2)
             {
                 _reportFile = _runner.ReportFile;
