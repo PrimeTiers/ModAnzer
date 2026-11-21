@@ -159,7 +159,7 @@ namespace ModAnzer
             _start.SetBounds(x, y, leftW, Theme.S(60)); y += Theme.S(70);
             _stop.SetBounds(x, y, leftW, Theme.S(46));
 
-            _admin.SetBounds(ClientSize.Width - pad - Theme.S(220), (header - Theme.S(40)) / 2, Theme.S(220), Theme.S(40));
+            _admin.SetBounds(ClientSize.Width - pad - Theme.S(280), (header - Theme.S(40)) / 2, Theme.S(280), Theme.S(40));
 
             int rx = pad + leftW + pad, rw = ClientSize.Width - rx - pad;
             int sy = header + pad, sh = Theme.S(88), gap = Theme.S(10);
@@ -195,11 +195,11 @@ namespace ModAnzer
             g.DrawImage(_logo, pad, (header - _logo.Height) / 2);
             float wx = pad + _logo.Width + Theme.S(12);
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
-            float modW = g.MeasureString("Mod", _wordmark).Width - Theme.S(6);
-            float anzW = g.MeasureString("Anzer", _wordmark).Width;
-            Theme.DrawText(g, "Mod", _wordmark, Theme.Text, new RectangleF(wx, 0, Theme.S(400), header), StringAlignment.Near, StringAlignment.Center, false);
-            Theme.DrawText(g, "Anzer", _wordmark, Theme.Purple, new RectangleF(wx + modW, 0, Theme.S(400), header), StringAlignment.Near, StringAlignment.Center, false);
-            Theme.DrawText(g, "for PrimeTiers screenshares", _tagline, Theme.Dim, new RectangleF(wx + modW + anzW + Theme.S(10), 0, Theme.S(260), header));
+            float modW = Theme.TextWidth(g, "Mod", _wordmark);
+            float anzW = Theme.TextWidth(g, "Anzer", _wordmark);
+            Theme.DrawText(g, "Mod", _wordmark, Theme.Text, new RectangleF(wx, 0, modW + Theme.S(40), header));
+            Theme.DrawText(g, "Anzer", _wordmark, Theme.Purple, new RectangleF(wx + modW + Theme.S(4), 0, anzW + Theme.S(40), header));
+            Theme.DrawText(g, "for PrimeTiers screenshares", _tagline, Theme.Dim, new RectangleF(wx + modW + anzW + Theme.S(18), 0, Theme.S(260), header));
             if (_running)
             {
                 Theme.DrawText(g, "Scanning...", _tagline, Theme.Gold, new RectangleF(0, 0, _admin.Left - Theme.S(16), header), StringAlignment.Far);
@@ -220,7 +220,7 @@ namespace ModAnzer
             _running = true;
             _reportFile = null;
             _suspicious = 0;
-            foreach (var s in _stats) s.Set("", Theme.Gold);
+            foreach (var s in _stats) s.Set("-", Theme.Dim);
             foreach (var b in _modeButtons) b.Enabled = false;
             _start.Enabled = false; _start.Text = "Scanning...";
             _send.Enabled = false; _send.Text = "Send";
@@ -261,6 +261,9 @@ namespace ModAnzer
         {
             if (_queue.IsEmpty) return;
             SendMessage(_out.Handle, 0x000B, IntPtr.Zero, IntPtr.Zero); // WM_SETREDRAW off
+            // A read-only RichTextBox plays the Windows error sound whenever text is deleted from it
+            // (every progress line that rewrites itself with `r). Unlock it only while we write.
+            _out.ReadOnly = false;
             try
             {
                 Tuple<string, ConsoleColor?, bool> item;
@@ -269,11 +272,19 @@ namespace ModAnzer
             }
             finally
             {
+                _out.ReadOnly = true;
                 SendMessage(_out.Handle, 0x000B, new IntPtr(1), IntPtr.Zero); // WM_SETREDRAW on
                 _out.SelectionStart = _out.TextLength;
                 _out.ScrollToCaret();
                 _out.Invalidate();
             }
+        }
+
+        private void ClearCurrentLine()
+        {
+            if (_out.TextLength <= _lineStart) return; // nothing to delete
+            _out.Select(_lineStart, _out.TextLength - _lineStart);
+            _out.SelectedText = "";
         }
 
         private void Append(string text, ConsoleColor? color, bool noNewLine)
@@ -284,8 +295,7 @@ namespace ModAnzer
                 if (i > 0)
                 {
                     // carriage return: rewrite the current line (progress counters)
-                    _out.Select(_lineStart, _out.TextLength - _lineStart);
-                    _out.SelectedText = "";
+                    ClearCurrentLine();
                     _line.Clear();
                 }
                 string part = parts[i];
@@ -293,8 +303,7 @@ namespace ModAnzer
                 if (_line.Length > 0 && _line.ToString().Trim().Length == 0)
                 {
                     // the script "clears" a progress line by printing spaces; drop them
-                    _out.Select(_lineStart, _out.TextLength - _lineStart);
-                    _out.SelectedText = "";
+                    ClearCurrentLine();
                     _line.Clear();
                 }
                 if (part.Trim().Length == 0 && _line.Length == 0 && i < parts.Length - 1) continue;
@@ -349,9 +358,9 @@ namespace ModAnzer
             if ((m = RxVerified.Match(line)).Success) _stats[0].Set(m.Groups[1].Value, Theme.Win);
             else if ((m = RxUnknown.Match(line)).Success) _stats[1].Set(m.Groups[1].Value, Theme.Gold);
             else if ((m = RxCheck.Match(line)).Success) _stats[2].Set(m.Groups[1].Value, Theme.Gold);
-            else if ((m = RxCheat.Match(line)).Success) { int v = int.Parse(m.Groups[1].Value); _stats[3].Set(v.ToString(), v > 0 ? Theme.Loss : Theme.Win); if (_stats[2].Value == "") _stats[2].Set("0", Theme.Win); }
+            else if ((m = RxCheat.Match(line)).Success) { int v = int.Parse(m.Groups[1].Value); _stats[3].Set(v.ToString(), v > 0 ? Theme.Loss : Theme.Win); if (_stats[2].Value == "-") _stats[2].Set("0", Theme.Win); }
             else if ((m = RxSusp.Match(line)).Success) { _suspicious += int.Parse(m.Groups[1].Value); _stats[4].Set(_suspicious.ToString(), _suspicious > 0 ? Theme.Loss : Theme.Win); }
-            else if (line.Trim() == "Nothing suspicious found." && _stats[4].Value == "") _stats[4].Set("0", Theme.Win);
+            else if (line.Trim() == "Nothing suspicious found." && _stats[4].Value == "-") _stats[4].Set("0", Theme.Win);
         }
 
         private void ShowNotice()

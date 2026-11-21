@@ -108,12 +108,48 @@ namespace ModAnzer
             }
         }
 
-        public static void DrawText(Graphics g, string text, Font font, Color color, RectangleF r, StringAlignment h = StringAlignment.Near, StringAlignment v = StringAlignment.Center, bool trim = true)
+        private static bool IsPixel(Font f) { return f.FontFamily.Name.StartsWith("Silkscreen"); }
+
+        /// <summary>Width of the text as it is really drawn (no GDI+ padding).</summary>
+        public static float TextWidth(Graphics g, string text, Font font)
         {
-            g.TextRenderingHint = font.FontFamily.Name.StartsWith("Silkscreen") ? TextRenderingHint.SingleBitPerPixelGridFit : TextRenderingHint.ClearTypeGridFit;
-            using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Alignment = h, LineAlignment = v, Trimming = trim ? StringTrimming.EllipsisCharacter : StringTrimming.None })
-            using (var br = new SolidBrush(color))
-                g.DrawString(text, font, br, r, sf);
+            g.TextRenderingHint = IsPixel(font) ? TextRenderingHint.SingleBitPerPixelGridFit : TextRenderingHint.ClearTypeGridFit;
+            using (var sf = (StringFormat)StringFormat.GenericTypographic.Clone())
+            {
+                sf.FormatFlags |= StringFormatFlags.MeasureTrailingSpaces | StringFormatFlags.NoWrap;
+                return g.MeasureString(text, font, PointF.Empty, sf).Width;
+            }
+        }
+
+        public static void DrawText(Graphics g, string text, Font font, Color color, RectangleF r, StringAlignment h = StringAlignment.Near, StringAlignment v = StringAlignment.Center)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            bool pixel = IsPixel(font);
+            g.TextRenderingHint = pixel ? TextRenderingHint.SingleBitPerPixelGridFit : TextRenderingHint.ClearTypeGridFit;
+            Font use = font;
+            try
+            {
+                if (pixel)
+                {
+                    // The pixel font has no usable "..." glyph (it draws as "_") and GDI+ drops the whole
+                    // line when it is taller than the box. So never trim or clip it: shrink it to fit instead.
+                    float w = TextWidth(g, text, use);
+                    while (w > r.Width && use.Size > 8)
+                    {
+                        var smaller = new Font(use.FontFamily, use.Size - 1, use.Style, GraphicsUnit.Pixel);
+                        if (!ReferenceEquals(use, font)) use.Dispose();
+                        use = smaller;
+                        w = TextWidth(g, text, use);
+                    }
+                }
+                using (var sf = new StringFormat(StringFormatFlags.NoWrap | (pixel ? StringFormatFlags.NoClip : 0)) { Alignment = h, LineAlignment = v, Trimming = pixel ? StringTrimming.None : StringTrimming.EllipsisCharacter })
+                using (var br = new SolidBrush(color))
+                    g.DrawString(text, use, br, r, sf);
+            }
+            finally
+            {
+                if (!ReferenceEquals(use, font)) use.Dispose();
+            }
         }
     }
 
@@ -191,8 +227,8 @@ namespace ModAnzer
     internal class StatBox : Control
     {
         public string Label = "";
-        public string Value = "";
-        public Color ValueColor = Theme.Gold;
+        public string Value = "-";
+        public Color ValueColor = Theme.Dim;
         private readonly Font _labelFont = Theme.Sans(13);
         private readonly Font _valueFont = Theme.Pixel(32);
 
@@ -210,7 +246,7 @@ namespace ModAnzer
             Theme.Bevel(g, ClientRectangle, false);
             int h = ClientRectangle.Height;
             Theme.DrawText(g, Label, _labelFont, Theme.Muted, new RectangleF(0, Theme.S(8), Width, h * 0.38f), StringAlignment.Center);
-            Theme.DrawText(g, Value, _valueFont, ValueColor, new RectangleF(0, h * 0.42f, Width, h * 0.5f), StringAlignment.Center);
+            Theme.DrawText(g, Value, _valueFont, ValueColor, new RectangleF(Theme.S(6), h * 0.38f, Width - Theme.S(12), h * 0.56f), StringAlignment.Center);
         }
     }
 
