@@ -10,7 +10,7 @@
 
 import { MongoClient } from "npm:mongodb@6.10.0";
 
-const MAX_BODY = 300_000;
+const MAX_BODY = 1_000_000;
 const LIMIT_PER_MINUTE = 6;
 const recent = new Map<string, { n: number; t: number }>();
 let client: MongoClient | null = null;
@@ -47,6 +47,12 @@ export function sanitize(raw: unknown) {
       Verified: num(m.Verified), CurseForgeApp: num(m.CurseForgeApp), Unknown: num(m.Unknown), Cheat: num(m.Cheat),
       Cheats: arr(m.Cheats, 300).map((c) => { const o = obj(c) ?? {}; return { Name: str(o.Name, 120), Where: str(o.Where, 120), Strings: str(o.Strings, 200) }; }),
       Unknowns: arr(m.Unknowns, 500).map((u) => { const o = obj(u) ?? {}; return { Name: str(o.Name, 120), Where: str(o.Where, 120) }; }),
+      // Every mod that was scanned, with its result.
+      All: arr(m.All, 3000).map((x) => {
+        const o = obj(x) ?? {};
+        const st = typeof o.Status === "string" && ["OK", "CF", "UNKNOWN", "CHECK", "CHEAT"].includes(o.Status) ? o.Status : "UNKNOWN";
+        return { Status: st, Name: str(o.Name, 120), Title: str(o.Title, 200), Where: str(o.Where, 120) };
+      }),
     },
     system: s && { Admin: s.Admin === true, Alerts: alerts(s.Alerts) },
     injection: i && { Admin: i.Admin === true, Uptime: str(i.Uptime, 30), GameFolder: str(i.GameFolder, 160), Alerts: alerts(i.Alerts) },
