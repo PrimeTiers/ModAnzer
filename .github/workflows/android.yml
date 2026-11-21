@@ -8,6 +8,7 @@ on:
       - 'ModAnzer.ps1'
       - 'ModAnzer.ico'
       - 'ModAnzer.bat'
+      - 'exe/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
@@ -15,10 +16,38 @@ permissions:
   contents: write
 
 jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ModAnzer.exe
+        run: dotnet build exe/ModAnzer.App.csproj -c Release -o exe-out
+
+      - name: Screenshot of the window
+        shell: pwsh
+        run: |
+          $p = Start-Process exe-out/ModAnzer.exe -ArgumentList '--screenshot', "$PWD\preview.png" -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw 'screenshot timed out' }
+          if (-not (Test-Path preview.png)) { throw 'no screenshot' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exe
+          path: |
+            exe-out/ModAnzer.exe
+            preview.png
+
   build:
+    needs: exe
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: exe
+          path: exe-artifact
 
       - uses: actions/setup-java@v4
         with:
@@ -52,11 +81,13 @@ jobs:
         run: |
           rm -f "$RUNNER_TEMP/modanzer.jks"
           cp android/app/build/outputs/apk/release/app-release.apk ModAnzer.apk
-          sha256sum ModAnzer.apk ModAnzer.ps1 ModAnzer.bat ModAnzer.ico > SHA256SUMS.txt
+          cp exe-artifact/exe-out/ModAnzer.exe ModAnzer.exe 2>/dev/null || cp exe-artifact/ModAnzer.exe ModAnzer.exe
+          sha256sum ModAnzer.exe ModAnzer.apk ModAnzer.ps1 ModAnzer.bat ModAnzer.ico > SHA256SUMS.txt
           cat SHA256SUMS.txt
           {
             echo "ModAnzer build #${{ github.run_number }} from commit ${{ github.sha }}."
             echo
+            echo "- **ModAnzer.exe**: Windows app. Double-click it, pick a check, press Start scan."
             echo "- **ModAnzer.apk**: Android app. Open it on your phone to install."
             echo "- **ModAnzer.bat**: Windows launcher. Double-click it to run ModAnzer."
             echo "- **ModAnzer.ps1**: Windows script. See the README for how to run it."
@@ -68,7 +99,7 @@ jobs:
             echo '```'
           } > notes.md
           gh release delete apk --yes --cleanup-tag || true
-          gh release create apk ModAnzer.apk ModAnzer.bat ModAnzer.ps1 ModAnzer.ico SHA256SUMS.txt \
+          gh release create apk ModAnzer.exe ModAnzer.apk ModAnzer.bat ModAnzer.ps1 ModAnzer.ico SHA256SUMS.txt \
             --target "${{ github.sha }}" \
             --title "ModAnzer (Android + Windows)" \
             --notes-file notes.md
