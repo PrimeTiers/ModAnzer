@@ -78,7 +78,7 @@ trap {
     Write-Host $_.Exception.Message -ForegroundColor Red
     Write-Host ("(line {0})" -f $_.InvocationInfo.ScriptLineNumber) -ForegroundColor DarkGray
     if (-not $NoPause) { Read-Host 'Press Enter to close' | Out-Null }
-    exit 1
+    exit 2
 }
 $ProgressPreference    = 'SilentlyContinue'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}

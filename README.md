@@ -16,6 +16,9 @@ powershell -ExecutionPolicy Bypass -NoProfile -Command "iex ((irm https://modanz
 
 ## Run it
 
+**Easiest:** download **[ModAnzer.bat](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.bat)** and double-click it. It runs the `ModAnzer.ps1` next to it if there is one, and otherwise downloads the latest version from the website. If Windows SmartScreen appears, click **More info → Run anyway**.
+
+
 **Easiest way:** download `ModAnzer.ps1`, right-click it and choose **Run with PowerShell**. If Windows asks whether to run a downloaded script, choose **Run once**. The window stays open at the end until you press Enter.
 
 **From a PowerShell window:**
