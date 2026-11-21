@@ -136,6 +136,20 @@ $ReportServerName = 'PrimeTiers'
 $ReportUrl = 'https://reumqqmnuvabnpmbstnu.supabase.co/functions/v1/modanzer-report'
 $script:RunReport = [ordered]@{ Mods = $null; System = $null; Injection = $null; Accounts = @() }
 
+# Legit client files that contain common words like "Velocity" for their own features.
+# A matching file (name AND folder) with ONLY common words counts as OK; any clear cheat
+# name (KillAura, AutoCrystal...) still makes it a cheat.
+$KnownClientJars = @(
+    @{ Name = 'Dawn client'; File = '^dawn-client.*\.jar$'; Folder = '[\\/]\.(dawn|feather)[\\/]' }
+)
+
+function Get-KnownClient($file) {
+    foreach ($k in $KnownClientJars) {
+        if ($file.Name -match $k.File -and $file.FullName -match $k.Folder) { return $k.Name }
+    }
+    return $null
+}
+
 # Folder names that hold mods
 $ModFolderNames = @('mods', 'user-mods')
 
@@ -245,10 +259,11 @@ function Search-Jar([IO.Stream]$stream, [string]$label, [System.Collections.Gene
     catch { return }
     try {
         $found = New-Object 'System.Collections.Generic.HashSet[string]'
+        $weak = New-Object 'System.Collections.Generic.HashSet[string]'
         foreach ($entry in $zip.Entries) {
             foreach ($m in $CheatRegex.Matches($entry.FullName)) { [void]$found.Add($m.Value) }
             $wm = $WeakNameRegex.Match($entry.FullName)
-            if ($wm.Success) { [void]$found.Add($wm.Groups[1].Value) }
+            if ($wm.Success) { [void]$weak.Add($wm.Groups[1].Value) }
 
             if ($entry.Length -eq 0 -or $entry.Length -gt $MaxEntryBytes) { continue }
             $lower = $entry.FullName.ToLowerInvariant()
@@ -264,12 +279,13 @@ function Search-Jar([IO.Stream]$stream, [string]$label, [System.Collections.Gene
                 $text = $latin1.GetString((Read-EntryBytes $entry))
                 foreach ($m in $CheatRegex.Matches($text)) { [void]$found.Add($m.Value) }
                 if ($lower.EndsWith('.class')) {
-                    foreach ($m in $WeakConstRegex.Matches($text)) { [void]$found.Add($m.Value.Substring(3)) }
+                    foreach ($m in $WeakConstRegex.Matches($text)) { [void]$weak.Add($m.Value.Substring(3)) }
                 }
             }
         }
-        if ($found.Count -gt 0) {
-            $hits.Add([PSCustomObject]@{ Where = $label; Strings = (@($found) | Sort-Object) })
+        if ($found.Count -gt 0 -or $weak.Count -gt 0) {
+            $all = @(@($found) + @($weak) | Sort-Object -Unique)
+            $hits.Add([PSCustomObject]@{ Where = $label; Strings = $all; Strong = ($found.Count -gt 0) })
         }
     } finally { $zip.Dispose() }
 }
@@ -1491,7 +1507,7 @@ function Invoke-ModAnalyzer {
             $fs = [IO.File]::OpenRead($jar.FullName)
             try { Search-Jar $fs $jar.Name $hits } finally { $fs.Dispose() }
         } catch {
-            $hits.Add([PSCustomObject]@{ Where = $jar.Name; Strings = @("could not open: $($_.Exception.Message)") })
+            $hits.Add([PSCustomObject]@{ Where = $jar.Name; Strings = @("could not open: $($_.Exception.Message)"); Strong = $false })
         }
         $scanned[$h] = $hits
     }
@@ -1500,9 +1516,10 @@ function Invoke-ModAnalyzer {
 
     # ---------------------------------------------------------------- 5. report
 
-    $totalCheat = 0; $totalUnknown = 0; $totalVerified = 0; $totalCf = 0
+    $totalCheat = 0; $totalUnknown = 0; $totalVerified = 0; $totalCf = 0; $totalCheck = 0
     $cheatList = New-Object 'System.Collections.Generic.List[object]'
     $unknownList = New-Object 'System.Collections.Generic.List[object]'
+    $checkList = New-Object 'System.Collections.Generic.List[object]'
 
     # "Launcher > instance" for a mods folder, e.g. "Modrinth > Atzlk_s PMW"
     function Get-InstanceLabel([string]$modsFolder) {
@@ -1533,7 +1550,24 @@ function Invoke-ModAnalyzer {
             }
             $hits = $null
             if ($j.Hash) { $hits = $scanned[$j.Hash] }
-            if ($hits -and $hits.Count -gt 0) {
+            $strongHit = $hits -and @($hits | Where-Object { $_.Strong }).Count -gt 0
+            $client = $null
+            if ($hits -and $hits.Count -gt 0 -and -not $strongHit) { $client = Get-KnownClient $j.File }
+            if ($client) {
+                # Legit client file; only common words like "Velocity" matched.
+                $totalVerified++
+                Write-Host ('  [OK]    {0,-32}' -f $client) -ForegroundColor Green -NoNewline
+                Write-Host $name -ForegroundColor DarkGray
+            } elseif ($hits -and $hits.Count -gt 0 -and -not $strongHit) {
+                # Only common words (Velocity, Hitboxes...) - a lead, not proof.
+                $totalCheck++
+                $allStrings = @($hits | ForEach-Object { $_.Strings } | Select-Object -Unique)
+                Write-Host "  [CHECK] $name" -ForegroundColor Yellow
+                Write-Host "          common words only: " -ForegroundColor Gray -NoNewline
+                Write-Host ($allStrings -join ', ') -ForegroundColor DarkYellow
+                Write-Host "          sha1: $($j.Hash)" -ForegroundColor DarkGray
+                $checkList.Add([PSCustomObject]@{ Name = $name; Where = (Get-InstanceLabel $f); Strings = ($allStrings -join ', ') })
+            } elseif ($hits -and $hits.Count -gt 0) {
                 $totalCheat++
                 Write-Host "  [CHEAT] $name" -ForegroundColor Red
                 foreach ($hit in $hits) {
@@ -1563,6 +1597,7 @@ function Invoke-ModAnalyzer {
     Write-Host "  Verified: $totalVerified" -ForegroundColor Green
     if ($totalCf -gt 0) { Write-Host "  CF app:   $totalCf  (installed by the CurseForge app, no cheat names found)" -ForegroundColor Cyan }
     Write-Host "  Unknown:  $totalUnknown" -ForegroundColor DarkYellow
+    if ($totalCheck -gt 0) { Write-Host "  Check:    $totalCheck  (only common words like Velocity - look at these by hand)" -ForegroundColor Yellow }
     Write-Host "  Cheat:    $totalCheat"   -ForegroundColor $(if ($totalCheat -gt 0) { 'Red' } else { 'Gray' })
     if ($Offline) { Write-Host '  (offline mode - no online lookups were made)' -ForegroundColor DarkGray }
 
@@ -1577,14 +1612,27 @@ function Invoke-ModAnalyzer {
             }
         }
     }
+    if ($checkList.Count -gt 0) {
+        Write-Host
+        Write-Section "Worth a look ($($checkList.Count))"
+        foreach ($group in ($checkList | Group-Object Where)) {
+            Write-Host "  $($group.Name)" -ForegroundColor White
+            foreach ($c in $group.Group) {
+                Write-Host "    [CHECK] $($c.Name)  " -ForegroundColor Yellow -NoNewline
+                Write-Host $c.Strings -ForegroundColor DarkYellow
+            }
+        }
+    }
     Write-Host
-    Write-Host 'Unknown does not mean cheat - it just is not on Modrinth/Megabase/CurseForge. Cheat hits are name matches; check them by hand.' -ForegroundColor DarkGray
+    Write-Host 'Unknown does not mean cheat - it just is not on Modrinth/Megabase/CurseForge. CHECK means only common words' -ForegroundColor DarkGray
+    Write-Host 'like Velocity matched. Cheat hits are clear cheat names. Check them all by hand.' -ForegroundColor DarkGray
 
     $script:RunReport.Mods = [ordered]@{
         Folders  = @($withJars | ForEach-Object { Get-InstanceLabel $_ })
-        Verified = $totalVerified; CurseForgeApp = $totalCf; Unknown = $totalUnknown; Cheat = $totalCheat
+        Verified = $totalVerified; CurseForgeApp = $totalCf; Unknown = ($totalUnknown + $totalCheck); Cheat = $totalCheat
         Cheats   = @($cheatList | ForEach-Object { [ordered]@{ Name = $_.Name; Where = $_.Where; Strings = $_.Strings } })
-        Unknowns = @($unknownList | ForEach-Object { [ordered]@{ Name = $_.Name; Where = $_.Where } })
+        Unknowns = @(@($checkList | ForEach-Object { [ordered]@{ Name = "$($_.Name) (CHECK - common words: $($_.Strings))"; Where = $_.Where } }) +
+                     @($unknownList | ForEach-Object { [ordered]@{ Name = $_.Name; Where = $_.Where } }))
     }
 }
 
