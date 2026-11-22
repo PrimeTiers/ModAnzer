@@ -1,68 +1,43 @@
 # ModAnzer
 
-A Minecraft mod analyzer for Windows. It finds every mods folder on the PC by itself, so there is no path to paste, then checks each mod against Modrinth and Megabase and scans unknown mods for cheat module names.
+A Minecraft mod analyzer for Windows, written in Java. It finds every mods folder on the PC by itself, so there is no path to paste, then checks each mod against Modrinth and Megabase and scans unknown mods for cheat module names.
 
-Based on [HabibiModAnalyzer](https://github.com/HadronCollision/PowershellScripts) by HadronCollision.
+Started from [HabibiModAnalyzer](https://github.com/HadronCollision/PowershellScripts) by HadronCollision.
 
 ## Website
 
-**https://modanzer.onrender.com** has the download buttons, the one-liner, and what the tools do and don't do. It's a Render static site built from this repo (`site/index.html`), and it updates on every push to `main`.
-
-Shortest way to run it:
-
-```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -Command "iex ((irm https://modanzer.onrender.com/ModAnzer.txt) -join [char]10)"
-```
+**https://modanzer.onrender.com** has the download buttons and what the tools do and don't do. It's a Render static site built from this repo (`site/index.html`), and it updates on every push to `main`.
 
 ## Run it
 
-**Easiest:** download **[ModAnzer.exe](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.exe)** and open it. It is a small Windows app in PrimeTiers colours: pick a check, press **Start scan**, then press **Get code** and give the code to staff. It runs the same `ModAnzer.ps1` (built into the exe) with Windows PowerShell 5.1 and needs .NET Framework 4.8, which Windows 10 and 11 already have. The source is in [`exe/`](exe). If Windows SmartScreen appears, click **More info → Run anyway**.
+**Easiest:** download **[ModAnzer.exe](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.exe)** and open it. It is a small Windows app in PrimeTiers colours: pick a check, press **Start scan**, then press **Get code** and give the code to staff. Java is built in, so there is nothing else to install. If Windows SmartScreen appears, click **More info → Run anyway**.
 
-**Or:** download **[ModAnzer.bat](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.bat)** and double-click it. It runs the `ModAnzer.ps1` next to it if there is one, and otherwise downloads the latest version from the website. If Windows SmartScreen appears, click **More info → Run anyway**.
+If your antivirus blocks `ModAnzer.exe` (it unpacks itself and starts), use **[ModAnzer-Windows.zip](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer-Windows.zip)** instead: unzip it and open `ModAnzer\ModAnzer.exe`.
 
+**With Java already installed (22 or newer):** download **[ModAnzer.jar](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.jar)** and double-click it, or run:
 
-**Easiest way:** download `ModAnzer.ps1`, right-click it and choose **Run with PowerShell**. If Windows asks whether to run a downloaded script, choose **Run once**. The window stays open at the end until you press Enter.
-
-**From a PowerShell window:**
-
-1. Download **[ModAnzer.ps1](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.ps1)** from the latest release. If you like, check it against `SHA256SUMS.txt` on the [release page](https://github.com/napatc1/ModAnzer/releases/tag/apk).
-2. Open PowerShell in the folder you saved it to and run:
-
-```powershell
-Unblock-File .\ModAnzer.ps1
-powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\ModAnzer.ps1
+```
+java --enable-native-access=ALL-UNNAMED -jar ModAnzer.jar
 ```
 
-`Unblock-File` tells Windows you trust the file you downloaded. `RemoteSigned` applies only to this one run and doesn't change any settings.
+**[ModAnzer.bat](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.bat)** does the same thing: it runs the `ModAnzer.jar` next to it, or downloads it first.
 
-Please don't run it with a pasted `irm ... | iex` one-liner. Downloading code and running it straight from memory with the execution policy bypassed is exactly how malware gets in, so antivirus tools watch for that pattern and may block or flag it. Running a saved file avoids that, and you can read the file before running it.
+The source is in [`windows/`](windows). It is plain Java with no libraries; build it with `mvn -f windows/pom.xml package`.
 
-### Desktop shortcut
-
-To start it with a double-click, download **[ModAnzer.ico](https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.ico)** and put it next to `ModAnzer.ps1`. Then:
-
-1. Right-click the desktop and choose **New → Shortcut**.
-2. For the location, enter the following, changing the path to where you saved the script:
-   ```
-   powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\Users\you\Downloads\ModAnzer\ModAnzer.ps1"
-   ```
-3. Name it **ModAnzer** and click **Finish**.
-4. Right-click the shortcut and choose **Properties → Change Icon → Browse**, then pick `ModAnzer.ico`.
-
-Make the shortcut on each PC rather than sending a `.lnk` file to someone. A shortcut only points to files on the PC it was made on, so the receiver gets a broken shortcut with no icon. Discord and antivirus tools also often block shortcut files that start PowerShell, because malware spreads that way. To share it, send the [release page](https://github.com/napatc1/ModAnzer/releases/tag/apk) link instead.
+Run it with `--cli` to use it in a console instead of the window.
 
 ## What it can do
 
-When it starts, the script asks what to do:
+Pick one of these in the window, then press **Start scan**:
 
 ```
-  1) Mod Analyzer       - check the mods in your mods folders  [default]
-  2) Injection Checker  - check the running game, its memory, and watch it live
-  3) System Check       - traces: programs that ran, deleted files, cleared logs, USB
-  4) Full Screenshare   - all three, one after another
+  Mod Analyzer       - check the mods in your mods folders
+  Injection Checker  - check the running game, its memory, and watch it live
+  System Check       - traces: programs that ran, deleted files, cleared logs, USB
+  Full Screenshare   - all three, one after another
 ```
 
-For options 2–4 it offers to restart as **administrator**. The player can say no; it then runs the checks a normal user can see and says which ones it skipped.
+For the Injection Checker and System Check, **Restart as admin** (top right) lets it read more. The player can say no; it then runs the checks a normal user can see and says which ones it skipped.
 
 ### Injection Checker
 
@@ -93,7 +68,7 @@ Everything is a lead, not proof. Check each one with the player.
 
 ### Sending results to staff
 
-When the scan ends, ModAnzer shows **"Press Enter to send and get your code"** (in the app: the **Get code** button). Sending saves the results on ModAnzer's server and shows a 6-character code, like `7k3qxf`. The player gives the code to staff, and staff run `/ssresult refcode:7k3qxf user:@player` in the PrimeTiers bot to see the report. Closing the window instead sends nothing. Use `-NoSend` to skip this, or `-NoPause` to send without asking.
+When the scan ends, press **Get code**. Sending saves the results on ModAnzer's server and shows a 6-character code, like `7k3qxf`. The player gives the code to staff, and staff run `/ssresult refcode:7k3qxf user:@player` in the PrimeTiers bot to see the report. Closing the window instead sends nothing. In `--cli` mode the code is sent at the end unless you pass `--no-send`.
 
 - Reports go to ModAnzer's server ([`supabase/functions/modanzer-report`](supabase/functions/modanzer-report/index.ts)), which saves them in the PrimeTiers bot's MongoDB, in the `modanzer_reports` collection, under a random reference code. Nothing is posted until staff look the code up with `/ssresult`.
 - The server keeps only the fields ModAnzer sends, and caps their sizes. It rate-limits each sender to 6 reports a minute and doesn't store IP addresses.
@@ -121,39 +96,23 @@ Saved report document:
 
 ### Antivirus
 
-The Mod Analyzer and System Check only read files, logs and the registry. The **memory scan** is different: to read Minecraft's memory, the script compiles a small built-in helper (it's in the script, look for `ModAnzerNative`) that uses the Windows functions for reading another program's memory. That's what cheats and malware use too, so **Windows Defender may flag or block the script**. The helper is only compiled when the Injection Checker or System Check runs, it only opens Minecraft for reading, and it never writes to, suspends or injects into any process. If the helper gets blocked, ModAnzer skips the memory scan and carries on.
+The Mod Analyzer and System Check only read files, logs and the registry. The **memory scan** is different: to read Minecraft's memory, ModAnzer calls the Windows functions for reading another program's memory (see [`Native.java`](windows/src/main/java/com/napatc1/modanzer/Native.java)). That's what cheats and malware use too, so **Windows Defender may flag or block the app**. It only opens Minecraft for reading, and it never writes to, suspends or injects into any process. If the memory reader is blocked, ModAnzer skips the memory scan and carries on.
 
-Use `-Mode mods|injection|system|full` to skip the menu, and `-LiveSeconds 300` to stop the live watch on its own after 5 minutes.
+When it starts, it first shows what it does and doesn't do. The Mod Analyzer then scans every launcher it finds, or only the one you pick in the **Launcher** list (Minecraft Launcher, CurseForge, Modrinth App, Prism / MultiMC, Lunar Client, or any folder you choose with **Other folder...**). If the launcher you pick has no mods folder in its usual place, it scans everything.
 
-When it starts, it first shows what it does and doesn't do, and waits for you to press Enter. The Mod Analyzer then asks which launcher you use:
+### Command line
 
-```
-  1) Scan everything (auto-detect)  [default]
-  2) Minecraft Launcher (.minecraft, Badlion, SKLauncher)
-  3) CurseForge
-  4) Modrinth App
-  5) Prism / MultiMC / PolyMC
-  6) ATLauncher
-  7) GDLauncher
-  8) Lunar Client
-  9) Dawn Client (formerly Feather)
- 10) Fast Client
- 11) TLauncher
- 12) Technic
- 13) Other (type the path to your mods folder)
-```
-
-Press Enter for 1. If the launcher you pick has no mods folder in its usual place, it asks you to paste the path, or press Enter to scan everything.
-
-### Options
+Add `--cli` to run in a console. Options:
 
 | Option | What it does |
 |---|---|
-| `-Path "D:\pack\mods"` | Skip the menu and scan only these folders (can list several, comma-separated) |
-| `-Offline` | Skip the online lookups; only do the cheat-string scan |
-| `-SkipIntro` | Don't show the "what this script does" notice at the start |
-| `-Mode mods` / `injection` / `system` / `full` | Skip the start menu and go straight to that option |
-| `-NoPause` | Don't wait for Enter before closing at the end |
+| `--mode mods` / `injection` / `system` / `full` | Which check to run (default `mods`) |
+| `--path "D:\pack\mods"` | Scan only this folder (can be given several times) |
+| `--launcher CurseForge` | Scan only a launcher whose name contains this text |
+| `--offline` | Skip the online lookups; only do the cheat-string scan |
+| `--live-seconds 300` | Stop the Injection Checker's live watch after 5 minutes (otherwise it runs until you close it) |
+| `--no-send` | Don't send the results to staff at the end |
+| `--report-out report.json` | Write the report to a file instead of sending it |
 
 ## Where it looks
 
@@ -191,16 +150,15 @@ Some legit client mods, such as FastClient HUD and Dawn, contain cheat-like name
 1807bd0592525fe40d0d0ee69d30b7486c48fdc7  FastClient HUD 1.21.11
 ```
 
-You can edit the file on GitHub, even from a phone, and the script and app pick it up on their next run. Each version of a mod has its own SHA1, so add a line whenever a trusted mod updates. Mods are trusted by exact SHA1 rather than by name, so a cheat renamed to look like a trusted mod is still caught.
+You can edit the file on GitHub, even from a phone, and the app picks it up on their next run. Each version of a mod has its own SHA1, so add a line whenever a trusted mod updates. Mods are trusted by exact SHA1 rather than by name, so a cheat renamed to look like a trusted mod is still caught.
 
 ### CurseForge
 
 Mods are checked against CurseForge's database by fingerprint, like they are on Modrinth and Megabase, and matches show as `[OK] Name [CurseForge]`.
 
-CurseForge requires an API key and asks that it be kept private, so the lookups go through a small server function ([`supabase/functions/modanzer-cf`](supabase/functions/modanzer-cf/index.ts)) that holds the key. The script and app send it only CurseForge fingerprints, which are numbers. It can only do fingerprint lookups and rate-limits each IP address. The key is stored as the `CURSEFORGE_API_KEY` secret in the Supabase project, never in this repo or the downloads.
+CurseForge requires an API key and asks that it be kept private, so the lookups go through a small server function ([`supabase/functions/modanzer-cf`](supabase/functions/modanzer-cf/index.ts)) that holds the key. The app sends it only CurseForge fingerprints, which are numbers. It can only do fingerprint lookups and rate-limits each IP address. The key is stored as the `CURSEFORGE_API_KEY` secret in the Supabase project, never in this repo or the downloads.
 
 - **[CF] results** come from the CurseForge app's own install record (`minecraftinstance.json`) and still work if the server is down. They're still scanned for cheat names, so a cheat added to that record still shows as `[CHEAT]`.
-- To ask CurseForge directly with your own key instead, put it in `$CurseForgeApiKey` near the top of `ModAnzer.ps1` or set the `MODANZER_CF_KEY` environment variable.
 
 ## Changes from HabibiModAnalyzer
 
@@ -232,8 +190,8 @@ From 30 September 2026, certified Android phones in Brazil, Indonesia, Singapore
 
 ## What antivirus might say
 
-Nothing in ModAnzer is hidden or obfuscated. The script is plain text, and the app's full source is in this repo.
+Nothing in ModAnzer is hidden or obfuscated. The full source of both apps is in this repo.
 
-- **Windows:** the memory scan is the part most likely to be flagged (see **Antivirus** above). The Mod Analyzer also lists folders in `%APPDATA%` and reads `.jar` files, which a heuristic scanner could mistake for a stealer, but it never opens tokens or passwords and sends only hashes. If Windows Defender flags it, [report a false positive to Microsoft](https://www.microsoft.com/en-us/wdsi/filesubmission).
+- **Windows:** the memory scan is the part most likely to be flagged (see **Antivirus** above), and so is any program that unpacks itself and starts, which is why a plain `.zip` is offered too. The Mod Analyzer also lists folders in `%APPDATA%` and reads `.jar` files, which a heuristic scanner could mistake for a stealer, but it never opens tokens or passwords and sends only hashes. If Windows Defender flags it, [report a false positive to Microsoft](https://www.microsoft.com/en-us/wdsi/filesubmission).
 - **Android:** Play Protect may warn about any app that doesn't come from the Play Store. Registering as a developer (above) removes that warning.
 

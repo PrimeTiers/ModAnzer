@@ -2,17 +2,20 @@
 title ModAnzer
 rem ModAnzer launcher - double-click to run the ModAnzer screenshare scanner.
 rem Source: https://github.com/napatc1/ModAnzer
-rem If ModAnzer.ps1 is in the same folder it runs that copy, otherwise it
-rem downloads the latest version from https://modanzer.onrender.com
+rem Needs Java 22 or newer (https://adoptium.net). Most people should use ModAnzer.exe instead,
+rem which has Java built in. If ModAnzer.jar is in the same folder it runs that copy,
+rem otherwise it downloads the latest one next to this file.
 
-if exist "%~dp0ModAnzer.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ModAnzer.ps1"
-) else (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((irm https://modanzer.onrender.com/ModAnzer.txt) -join [char]10)"
+if not exist "%~dp0ModAnzer.jar" (
+    echo Downloading ModAnzer.jar...
+    curl -L -s -o "%~dp0ModAnzer.jar" https://github.com/napatc1/ModAnzer/releases/download/apk/ModAnzer.jar
 )
 
-if %errorlevel% equ 1 (
+java --enable-native-access=ALL-UNNAMED -jar "%~dp0ModAnzer.jar" %*
+
+if %errorlevel% neq 0 (
     echo.
-    echo ModAnzer could not start. Check your internet connection and try again.
+    echo ModAnzer could not start. It needs Java 22 or newer: https://adoptium.net
+    echo Or download ModAnzer.exe, which does not need Java.
     pause
 )
