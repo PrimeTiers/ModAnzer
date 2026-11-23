@@ -5,10 +5,10 @@ on:
     branches: [main]
     paths:
       - 'android/**'
+      - 'windows/**'
       - 'ModAnzer.ps1'
       - 'ModAnzer.ico'
       - 'ModAnzer.bat'
-      - 'exe/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
@@ -16,46 +16,69 @@ permissions:
   contents: write
 
 jobs:
-  exe:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build ModAnzer.exe
-        run: dotnet build exe/ModAnzer.App.csproj -c Release -o exe-out
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
 
-      - name: Screenshot of the window
+      - name: Build ModAnzer.jar
+        run: mvn -B -f windows/pom.xml package
+
+      - name: Smoke test on Windows
+        continue-on-error: true
         shell: pwsh
         run: |
-          $p = Start-Process exe-out/ModAnzer.exe -ArgumentList '--screenshot', "$PWD\preview.png" -PassThru
-          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw 'screenshot timed out' }
-          if (-not (Test-Path preview.png)) { throw 'no screenshot' }
-          $p = Start-Process exe-out/ModAnzer.exe -ArgumentList '--screenshot', "$PWD\scan.png", '--scan', 'system' -PassThru
-          if (-not $p.WaitForExit(600000)) { $p.Kill(); throw 'scan timed out' }
-          Get-Content scan.png.txt | Select-Object -Last 60
-          foreach ($f in 'preview.png', 'scan.png') {
-            $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\$f"))
-            Write-Output "PNG-BEGIN $f"; for ($i = 0; $i -lt $b.Length; $i += 4000) { Write-Output ('PNG ' + $b.Substring($i, [Math]::Min(4000, $b.Length - $i))) }; Write-Output "PNG-END $f"
+          foreach ($m in 'mods', 'system', 'injection') {
+            Write-Output "=== $m ==="
+            java --enable-native-access=ALL-UNNAMED -jar windows/target/ModAnzer.jar --cli --mode $m --no-send --offline --live-seconds 3 2>&1 | Select-Object -Last 60
           }
+
+      - name: Make the Windows app (Java included)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory jpackage-in | Out-Null
+          Copy-Item windows/target/ModAnzer.jar jpackage-in/
+          jpackage --type app-image --name ModAnzer --input jpackage-in --main-jar ModAnzer.jar `
+            --main-class com.napatc1.modanzer.Main --icon ModAnzer.ico --dest dist `
+            --add-modules java.base,java.desktop,java.net.http,java.logging,java.prefs `
+            --java-options '--enable-native-access=ALL-UNNAMED' `
+            --app-version "1.0.${{ github.run_number }}" --vendor napatc1 `
+            --jlink-options '--strip-debug --no-header-files --no-man-pages'
+          if (-not (Test-Path dist/ModAnzer/ModAnzer.exe)) { throw 'jpackage did not make ModAnzer.exe' }
+
+          # ModAnzer.exe: one file you double-click. It unpacks the app next to it in Temp and starts it.
+          # ModAnzer-Windows.zip: the same app as a plain folder, for when antivirus blocks the single file.
+          Compress-Archive -Path dist/ModAnzer -DestinationPath ModAnzer-Windows.zip
+          $sevenZip = 'C:\Program Files\7-Zip'
+          & "$sevenZip\7z.exe" a -mx=7 payload.7z .\dist\ModAnzer | Out-Null
+          if (-not (Test-Path "$sevenZip\7z.sfx")) { throw '7z.sfx not found' }
+          Set-Content -Path sfx.txt -Encoding utf8 -Value @(';!@Install@!UTF-8!', 'RunProgram="ModAnzer\ModAnzer.exe"', 'GUIMode="2"', ';!@InstallEnd@!')
+          cmd /c copy /b "$sevenZip\7z.sfx" + sfx.txt + payload.7z ModAnzer.exe
+          Copy-Item windows/target/ModAnzer.jar ModAnzer.jar
 
       - uses: actions/upload-artifact@v4
         with:
-          name: exe
+          name: windows
           path: |
-            exe-out/ModAnzer.exe
-            preview.png
-            scan.png
+            ModAnzer.exe
+            ModAnzer.jar
+            ModAnzer-Windows.zip
 
   build:
-    needs: exe
+    needs: windows
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
-          name: exe
-          path: exe-artifact
+          name: windows
+          path: windows-artifact
 
       - uses: actions/setup-java@v4
         with:
@@ -89,17 +112,18 @@ jobs:
         run: |
           rm -f "$RUNNER_TEMP/modanzer.jks"
           cp android/app/build/outputs/apk/release/app-release.apk ModAnzer.apk
-          cp exe-artifact/exe-out/ModAnzer.exe ModAnzer.exe 2>/dev/null || cp exe-artifact/ModAnzer.exe ModAnzer.exe
-          sha256sum ModAnzer.exe ModAnzer.apk ModAnzer.ps1 ModAnzer.bat ModAnzer.ico > SHA256SUMS.txt
+          cp windows-artifact/ModAnzer.exe windows-artifact/ModAnzer.jar windows-artifact/ModAnzer-Windows.zip .
+          sha256sum ModAnzer.exe ModAnzer.jar ModAnzer-Windows.zip ModAnzer.apk ModAnzer.bat ModAnzer.ico > SHA256SUMS.txt
           cat SHA256SUMS.txt
           {
             echo "ModAnzer build #${{ github.run_number }} from commit ${{ github.sha }}."
             echo
-            echo "- **ModAnzer.exe**: Windows app. Double-click it, pick a check, press Start scan."
+            echo "- **ModAnzer.exe**: Windows app. Double-click it, pick a check, press Start scan. Java is built in."
+            echo "- **ModAnzer-Windows.zip**: the same Windows app as a folder, if antivirus blocks ModAnzer.exe."
+            echo "- **ModAnzer.jar**: the Windows app for people who already have Java 22 or newer."
             echo "- **ModAnzer.apk**: Android app. Open it on your phone to install."
-            echo "- **ModAnzer.bat**: Windows launcher. Double-click it to run ModAnzer."
-            echo "- **ModAnzer.ps1**: Windows script. See the README for how to run it."
-            echo "- **ModAnzer.ico**: icon for a desktop shortcut to the script."
+            echo "- **ModAnzer.bat**: runs ModAnzer.jar (downloads it first if needed)."
+            echo "- **ModAnzer.ico**: icon for a desktop shortcut."
             echo
             echo "SHA256 checksums:"
             echo '```'
@@ -107,7 +131,7 @@ jobs:
             echo '```'
           } > notes.md
           gh release delete apk --yes --cleanup-tag || true
-          gh release create apk ModAnzer.exe ModAnzer.apk ModAnzer.bat ModAnzer.ps1 ModAnzer.ico SHA256SUMS.txt \
+          gh release create apk ModAnzer.exe ModAnzer-Windows.zip ModAnzer.jar ModAnzer.apk ModAnzer.bat ModAnzer.ico SHA256SUMS.txt \
             --target "${{ github.sha }}" \
             --title "ModAnzer (Android + Windows)" \
             --notes-file notes.md
