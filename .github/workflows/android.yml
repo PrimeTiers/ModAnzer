@@ -15,6 +15,11 @@ on:
 permissions:
   contents: write
 
+# Only one build publishes at a time, so two runs can't remove each other's release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -130,8 +135,14 @@ jobs:
             cat SHA256SUMS.txt
             echo '```'
           } > notes.md
-          gh release delete apk --yes --cleanup-tag || true
-          gh release create apk ModAnzer.exe ModAnzer-Windows.zip ModAnzer.jar ModAnzer.apk ModAnzer.bat ModAnzer.ico SHA256SUMS.txt \
-            --target "${{ github.sha }}" \
-            --title "ModAnzer (Android + Windows)" \
-            --notes-file notes.md
+          # Update the release in place. It is never deleted, so the download links keep working
+          # even if a step here fails.
+          if ! gh release view apk >/dev/null 2>&1; then
+            gh release create apk --target "${{ github.sha }}" --title "ModAnzer (Android + Windows)" --notes-file notes.md
+          fi
+          gh release upload apk ModAnzer.exe ModAnzer-Windows.zip ModAnzer.jar ModAnzer.apk ModAnzer.bat ModAnzer.ico SHA256SUMS.txt --clobber
+          gh release edit apk --title "ModAnzer (Android + Windows)" --notes-file notes.md
+          for old in ModAnzer.ps1; do gh release delete-asset apk "$old" --yes 2>/dev/null || true; done
+          # point the apk tag at this build
+          git tag -f apk "${{ github.sha }}"
+          git push -f origin refs/tags/apk
