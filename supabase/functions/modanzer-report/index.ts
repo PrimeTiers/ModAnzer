@@ -71,7 +71,6 @@ function newCode(): string {
     return CODE_CHARS[b % 31];
   }).join("");
 }
-
 async function shortHash(text: string): Promise<string> {
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
